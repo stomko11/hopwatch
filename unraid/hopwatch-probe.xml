@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>hopwatch-probe</Name>
+  <Repository>ghcr.io/stomko11/hopwatch-probe:latest</Repository>
+  <Registry>https://github.com/stomko11/hopwatch/pkgs/container/hopwatch-probe</Registry>
+  <Network>host</Network>
+  <MyIP/>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/stomko11/hopwatch/issues</Support>
+  <Project>https://github.com/stomko11/hopwatch</Project>
+  <Overview>Hopwatch Probe pings your targets every second, keeps the history (every ping for days, minute and 5-minute averages for months) and runs MTR on demand or automatically when packet loss goes over a limit. MTR results come with a "Copy for support" text in the usual mtr report layout. Everything is set in the web UI; open it once to set the admin password.&#xD;
+&#xD;
+Host network is recommended: MTR then shows your real first hop instead of the Docker bridge.</Overview>
+  <Category>Network:Other Tools:Utilities</Category>
+  <WebUI>http://[IP]:8095/</WebUI>
+  <TemplateURL>https://raw.githubusercontent.com/stomko11/hopwatch/main/unraid/hopwatch-probe.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/stomko11/hopwatch/main/docs/icon.png</Icon>
+  <ExtraParams>--cap-add=NET_RAW --log-opt max-size=10m</ExtraParams>
+  <PostArgs/>
+  <CPUset/>
+  <DonateText/>
+  <DonateLink/>
+  <Requires/>
+  <Config Name="Web UI port" Target="HOPWATCH_PORT" Default="8095" Mode="" Description="Port of the web UI. With host network this is the port on the server; if you change it, also change the WebUI link under Advanced." Type="Variable" Display="always" Required="true" Mask="false">8095</Config>
+  <Config Name="Data" Target="/data" Default="/mnt/user/appdata/hopwatch-probe" Mode="rw" Description="Settings, ping history and MTR results (about 250 MB a year for 50 targets)." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/hopwatch-probe</Config>
+  <Config Name="Reset admin password" Target="HOPWATCH_RESET_PASSWORD" Default="false" Mode="" Description="true removes the admin password at the next start, so you can set a new one in the web UI. Switch it back to false afterwards." Type="Variable" Display="advanced" Required="false" Mask="false">false</Config>
+  <Config Name="Log level" Target="HOPWATCH_LOG" Default="INFO" Mode="" Description="DEBUG, INFO or WARNING" Type="Variable" Display="advanced" Required="false" Mask="false">INFO</Config>
+</Container>

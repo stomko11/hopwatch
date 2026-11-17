@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hopwatch Probe</title>
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <a class="brand" href="#/"><img src="icon.svg" alt="" width="22" height="22"><span>Hopwatch <b>Probe</b></span></a>
+  <span id="site" class="site"></span>
+  <nav id="nav">
+    <a href="#/" data-v="overview">Overview</a>
+    <a href="#/charts" data-v="charts">Charts</a>
+    <a href="#/mtr" data-v="mtr">MTR</a>
+    <a href="#/events" data-v="events">Events</a>
+    <a href="#/settings" data-v="settings">Settings</a>
+  </nav>
+  <span id="busy" class="chip hidden"></span>
+  <span class="grow"></span>
+  <span class="seg" id="tzSeg" title="Times shown in"><button data-tz="local">Local</button><button data-tz="utc">UTC</button></span>
+  <button id="loginBtn" class="btn small">Log in</button>
+</header>
+<div id="banner" class="banner hidden"></div>
+<main id="main"><p class="muted">Loading…</p></main>
+<div id="modal" class="modal hidden"><div class="box" id="modalBox"></div></div>
+<div id="tip" class="tip hidden"></div>
+<div id="toast" class="toast hidden"></div>
+<script src="app.js"></script>
+</body>
+</html>

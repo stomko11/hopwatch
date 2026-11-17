@@ -1,0 +1,185 @@
+"""Settings: defaults, validation and the JSON file in the data folder.
+
+Everything a user can change lives here and is edited in the web UI. Environment variables only
+cover what must be known before the UI is reachable (port, data folder, password reset).
+"""
+import copy
+import ipaddress
+import json
+import os
+import re
+import threading
+
+VERSION = "0.1.0"
+
+DEFAULTS = {
+    "site_name": "",
+    "targets": [
+        {"location": "Cloudflare DNS", "host": "1.1.1.1", "enabled": True},
+        {"location": "Google DNS", "host": "8.8.8.8", "enabled": True},
+    ],
+    "ping": {"interval_ms": 1000, "timeout_ms": 1000, "size": 56},
+    "alerts": {"window_s": 60, "loss_warn": 5, "loss_crit": 20, "rtt_warn_ms": 0, "rtt_crit_ms": 0},
+    "auto_mtr": {"enabled": True, "loss_pct": 20, "window_s": 60, "cooldown_min": 30,
+                 "per_location": True, "max_per_hour": 20, "mode": "icmp"},
+    "mtr": {"cycles": 100, "interval_s": 1.0, "resolve": True, "asn": True, "max_parallel": 4,
+            "public_ip_url": "https://api.ipify.org"},
+    "tcp_check": {"enabled": True, "port": 443, "every_h": 24},
+    "retention": {"raw_days": 7, "m1_days": 90, "m5_days": 365, "mtr_days": 365, "mtr_max": 5000},
+    "security": {"password_hash": "", "view_requires_login": False, "cors_origins": "*", "tokens": []},
+}
+
+# (section, key) -> (type, min, max)
+LIMITS = {
+    ("ping", "interval_ms"): (int, 200, 10000),
+    ("ping", "timeout_ms"): (int, 100, 10000),
+    ("ping", "size"): (int, 0, 1472),
+    ("alerts", "window_s"): (int, 10, 3600),
+    ("alerts", "loss_warn"): (float, 0, 100),
+    ("alerts", "loss_crit"): (float, 0, 100),
+    ("alerts", "rtt_warn_ms"): (float, 0, 60000),
+    ("alerts", "rtt_crit_ms"): (float, 0, 60000),
+    ("auto_mtr", "loss_pct"): (float, 1, 100),
+    ("auto_mtr", "window_s"): (int, 10, 3600),
+    ("auto_mtr", "cooldown_min"): (int, 1, 1440),
+    ("auto_mtr", "max_per_hour"): (int, 1, 500),
+    ("mtr", "cycles"): (int, 5, 1000),
+    ("mtr", "interval_s"): (float, 0.1, 10),
+    ("mtr", "max_parallel"): (int, 1, 16),
+    ("tcp_check", "port"): (int, 1, 65535),
+    ("tcp_check", "every_h"): (int, 1, 168),
+    ("retention", "raw_days"): (int, 1, 60),
+    ("retention", "m1_days"): (int, 1, 730),
+    ("retention", "m5_days"): (int, 1, 3650),
+    ("retention", "mtr_days"): (int, 1, 3650),
+    ("retention", "mtr_max"): (int, 10, 100000),
+}
+BOOLS = {("auto_mtr", "enabled"), ("auto_mtr", "per_location"), ("mtr", "resolve"), ("mtr", "asn"),
+         ("tcp_check", "enabled"), ("security", "view_requires_login")}
+CHOICES = {("auto_mtr", "mode"): ("icmp", "tcp", "tcp_if_open")}
+
+_HOST_RE = re.compile(r"^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,62})(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,62}))*\.?$")
+
+
+class ConfigError(ValueError):
+    pass
+
+
+def valid_host(h: str) -> bool:
+    """IPv4 / IPv6 literal or a DNS name. Never starts with '-', so it can't be read as a CLI option."""
+    if not isinstance(h, str) or not h or h.startswith("-"):
+        return False
+    try:
+        ipaddress.ip_address(h)
+        return True
+    except ValueError:
+        return bool(_HOST_RE.match(h))
+
+
+def _merge(base, over):
+    out = copy.deepcopy(base)
+    for k, v in (over or {}).items():
+        if isinstance(out.get(k), dict) and isinstance(v, dict):
+            out[k] = _merge(out[k], v)
+        else:
+            out[k] = v
+    return out
+
+
+def validate(cfg: dict) -> dict:
+    """Return a cleaned copy or raise ConfigError with a message for the UI."""
+    c = _merge(DEFAULTS, cfg)
+    c["site_name"] = str(c.get("site_name") or "").strip()[:60]
+    for (sec, key), (typ, lo, hi) in LIMITS.items():
+        try:
+            v = typ(c[sec][key])
+        except (TypeError, ValueError):
+            raise ConfigError(f"{sec}.{key}: not a number")
+        if not lo <= v <= hi:
+            raise ConfigError(f"{sec}.{key}: must be between {lo} and {hi}")
+        c[sec][key] = v
+    for sec, key in BOOLS:
+        c[sec][key] = bool(c[sec][key])
+    for (sec, key), opts in CHOICES.items():
+        if c[sec][key] not in opts:
+            raise ConfigError(f"{sec}.{key}: one of {', '.join(opts)}")
+    if c["alerts"]["loss_crit"] < c["alerts"]["loss_warn"]:
+        raise ConfigError("alerts: critical loss must be at least the warning loss")
+    if c["ping"]["timeout_ms"] > c["ping"]["interval_ms"]:
+        raise ConfigError("ping: timeout can't be longer than the interval")
+    url = str(c["mtr"].get("public_ip_url") or "").strip()
+    if url and not re.match(r"^https?://[^\s]+$", url):
+        raise ConfigError("mtr.public_ip_url: must start with http:// or https://")
+    c["mtr"]["public_ip_url"] = url
+    origins = str(c["security"].get("cors_origins") or "").strip()
+    c["security"]["cors_origins"] = origins
+    seen, targets = set(), []
+    for t in c.get("targets") or []:
+        host = str(t.get("host") or "").strip()
+        loc = str(t.get("location") or "").strip()[:60] or host
+        if not valid_host(host):
+            raise ConfigError(f"target '{host}': not an IP address or host name")
+        if host in seen:
+            raise ConfigError(f"target '{host}' is listed twice")
+        seen.add(host)
+        targets.append({"location": loc, "host": host, "enabled": bool(t.get("enabled", True))})
+    if len(targets) > 500:
+        raise ConfigError("at most 500 targets")
+    c["targets"] = targets
+    return c
+
+
+class Config:
+    """Thread-safe holder; listeners are called after every successful save."""
+
+    def __init__(self, path: str):
+        self.path = path
+        self.lock = threading.Lock()
+        self.listeners = []
+        data = {}
+        if os.path.exists(path):
+            with open(path) as f:
+                data = json.load(f)
+        self.data = validate(data)
+        if not os.path.exists(path):
+            self._write()
+
+    def get(self) -> dict:
+        with self.lock:
+            return copy.deepcopy(self.data)
+
+    def _write(self) -> None:
+        tmp = self.path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(self.data, f, indent=1)
+        os.replace(tmp, self.path)
+
+    def update(self, new: dict, keep_security: bool = True) -> dict:
+        """Replace the settings. The security block is only changed through its own calls."""
+        with self.lock:
+            cur = copy.deepcopy(self.data)
+            if keep_security:
+                sec = cur["security"]
+                new = dict(new)
+                new["security"] = {**sec, **{k: v for k, v in (new.get("security") or {}).items()
+                                            if k in ("view_requires_login", "cors_origins")}}
+            self.data = validate(new)
+            self._write()
+            out = copy.deepcopy(self.data)
+        for fn in self.listeners:
+            fn(out)
+        return out
+
+    def set_security(self, **kw) -> None:
+        with self.lock:
+            self.data["security"].update(kw)
+            self._write()
+
+    def public(self) -> dict:
+        """Settings as shown in the UI: no password hash, token hashes replaced by names."""
+        c = self.get()
+        sec = c["security"]
+        c["security"] = {"view_requires_login": sec["view_requires_login"], "cors_origins": sec["cors_origins"],
+                         "password_set": bool(sec["password_hash"]),
+                         "tokens": [{"id": t["id"], "name": t["name"], "created": t["created"]} for t in sec["tokens"]]}
+        return c
