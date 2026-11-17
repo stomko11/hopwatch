@@ -27,7 +27,7 @@ def clean_url(url: str) -> str:
 def targets(url: str):
     """-> [{"location", "host", "chart"}] from the charts with context ping.host_rtt."""
     url = clean_url(url)
-    charts = _get(url + "/api/v1/charts").get("charts", {})
+    charts = _get(url + "/api/v1/charts", timeout=120).get("charts", {})   # several MB with many targets
     out = []
     for cid, ch in charts.items():
         if ch.get("context") != "ping.host_rtt":

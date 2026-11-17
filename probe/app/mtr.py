@@ -254,15 +254,13 @@ class MtrRunner:
                 self.tcp_last = time.time()
                 hosts = [t["host"] for t in c["targets"] if t["enabled"]]
                 res = {}
-                threads = []
-                for h in hosts:
-                    th = threading.Thread(target=lambda h=h: res.__setitem__(h, self._probe_tcp(h, tc["port"])), daemon=True)
-                    th.start()
-                    threads.append(th)
-                    if len(threads) % 20 == 0:
-                        time.sleep(0.2)
-                for th in threads:
-                    th.join(10)
+                for i in range(0, len(hosts), 10):     # 10 at a time, gentle on small routers
+                    batch = [threading.Thread(target=lambda h=h: res.__setitem__(h, self._probe_tcp(h, tc["port"])), daemon=True)
+                             for h in hosts[i:i + 10]]
+                    for th in batch:
+                        th.start()
+                    for th in batch:
+                        th.join(10)
                 with self.tcp_lock:
                     self.tcp = {h: {"state": res.get(h, "error"), "port": tc["port"], "t": time.time()} for h in hosts}
             self.tcp_wake.wait(60)
