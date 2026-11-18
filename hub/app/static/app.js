@@ -392,34 +392,31 @@
   function vMtr() {
     head('MTR', 'Runs from every site, newest first', '<button class="btn-p" id="runBtn">' + I('play') + 'MTR from all sites</button>');
     $('runBtn').onclick = function () { mtrDialog([]); };
-    var f = HW.lsj('hmtr', { range: 604800, hosts: [], probes: [], trig: [] });
-    if (qs('host')) f.hosts = [qs('host')];
+    var f = HW.lsj('hmtr', { range: 604800 });
     (function () {
-      $('main').innerHTML = '<div class="card"><div class="bd row gap12"><span id="rR"></span><div id="rH"></div><div id="rP"></div><div id="rT"></div></div></div>' +
+      $('main').innerHTML = '<div class="card"><div class="bd row gap12"><span id="rR"></span></div></div>' +
         '<div class="card"><div class="hd"><h2 id="rN">Runs</h2><span class="sub" id="rB"></span></div><div class="bd"><div id="rL"></div></div></div>';
       var rp = HW.rangePicker($('rR'), [[86400, '24h'], [604800, '7d'], [2592000, '30d']], qs('from') ? { from: +qs('from'), to: +qs('to') } : { range: f.range }, function (w) { if (w.range) f.range = w.range; HW.ls('hmtr', f); load(); });
-      // the list does not wait for the live status; the pickers fill in when it arrives
-      var mH = HW.ms($('rH'), { options: f.hosts.map(function (h) { return { value: h, label: h }; }), value: f.hosts, label: 'Targets', onChange: function (v) { f.hosts = v; HW.ls('hmtr', f); load(); } });
-      var mP = HW.ms($('rP'), { options: [], value: f.probes, label: 'Sites', onChange: function (v) { f.probes = v; HW.ls('hmtr', f); load(); } });
-      live().then(function (l) { mH.options(targetOpts(l)); mH.set(f.hosts, true); mP.options(probeOpts(l)); mP.set(f.probes, true); });
-      HW.ms($('rT'), { options: Object.keys(TRIG).map(function (k) { return { value: k, label: TRIG[k][0] }; }), value: f.trig, label: 'Trigger', onChange: function (v) { f.trig = v; HW.ls('hmtr', f); load(); } });
+      // filtering is in the table: a search box and a filter under every column (links preset the target)
       var tbl = null;
+      if (qs('host')) $('rL')._tf = { host: '=' + qs('host') };
       function load() {
         var w = rp.get();
-        api('/api/mtr?limit=500&from=' + Math.floor(w.from) + '&to=' + Math.ceil(w.to) + (f.hosts.length ? '&host=' + encodeURIComponent(f.hosts.join(',')) : '') + (f.probes.length ? '&probe=' + f.probes.join(',') : '') + (f.trig.length ? '&trig=' + f.trig.join(',') : '')).then(function (r) {
+        api('/api/mtr?limit=2000&from=' + Math.floor(w.from) + '&to=' + Math.ceil(w.to)).then(function (r) {
           $('rN').textContent = r.runs.length + ' runs';
           $('rB').textContent = Object.keys(r.errors).length ? 'not answering: ' + Object.keys(r.errors).join(', ') : '';
           var cols = [
-            { key: 'started', label: 'Started', nowrap: true, text: function (x) { return HW.fdt(x.started || x.created); }, sort: function (x) { return x.started || x.created; } },
+            { key: 'started', label: 'Started', type: 'time', nowrap: true, text: function (x) { return HW.fdt(x.started || x.created); }, sort: function (x) { return x.started || x.created; } },
             { key: 'probe_name', label: 'Site', html: function (x) { return '<b>' + esc(x.probe_name) + '</b>'; } },
             { key: 'location', label: 'Location' },
             { key: 'host', label: 'Target', html: function (x) { return '<span class="mono small">' + esc(x.host) + '</span>'; } },
             { key: 'mode', label: 'Mode', text: modeName },
             { key: 'trig', label: 'Trigger', text: function (x) { return (TRIG[x.trig] || [x.trig])[0] + (x.reason ? ' ' + x.reason : ''); }, html: function (x) { return trigPill(x) + (x.reason ? ' <span class="xs muted">' + esc(x.reason) + '</span>' : ''); } },
             { key: 'status', label: 'Status', html: function (x) { return x.status === 'running' || x.status === 'queued' ? HW.mtrProgress(x, 1) : statusPill(x); } },
-            { key: 'dst_loss', label: 'Loss at target', minw: 140, text: function (x) { return x.dst_loss == null ? '' : x.dst_loss + '%'; }, sort: function (x) { return x.dst_loss == null ? -1 : x.dst_loss; }, html: function (x) { return lossCell(x.dst_loss); } },
-            { key: 'hops', label: 'Hops', align: 'r', sort: function (x) { return x.hops || 0; } }];
-          if (tbl) tbl.render(r.runs); else tbl = HW.table($('rL'), { id: 'hub-mtr', rows: r.runs, columns: cols, empty: 'No runs in this window.',
+            { key: 'dst_loss', label: 'Loss at target', type: 'num', val: function (x) { return x.dst_loss; }, minw: 140, text: function (x) { return x.dst_loss == null ? '' : x.dst_loss + '%'; }, sort: function (x) { return x.dst_loss == null ? -1 : x.dst_loss; }, html: function (x) { return lossCell(x.dst_loss); } },
+            { key: 'hops', label: 'Hops', type: 'num', align: 'r', val: function (x) { return x.hops; }, sort: function (x) { return x.hops || 0; } }];
+          if (tbl) tbl.render(r.runs); else tbl = HW.table($('rL'), { id: 'hub-mtr', rows: r.runs, columns: cols, filterRow: true, empty: 'No runs in this window.',
+            searchText: function (x) { return x.id + ' ' + (x.error || ''); },
             onRow: function (x) { location.hash = '#/run?probe=' + x.probe + '&id=' + x.id; } });
         }).catch(fail);
       }

@@ -256,3 +256,5 @@ details.help>summary::-webkit-details-marker{display:none} details.help>div{padd
 .rolehd{display:flex;align-items:center;gap:6px;padding:7px 14px 3px;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);border-top:1px solid var(--border)}
 .rolehd:first-of-type{border-top:0}
 .pkr{justify-content:flex-start;text-align:left;width:100%;gap:8px;min-width:0}
+
+.tsearch{width:280px;max-width:100%} .table tr.fr th{padding:4px 6px} .table tr.fr input{width:100%;min-width:70px;height:28px;font-size:12px;padding:3px 7px} .table tr.fr input.on{border-color:var(--accent)}

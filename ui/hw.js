@@ -479,46 +479,126 @@
     setTimeout(function () { HW.chart($('hwBig'), series, big); }, 30);
   };
 
+  /* ------------------------------------------------------------ column filter expressions
+     HW.colFilter(expr, type) -> fn(text, value) or null when empty. A comma means "or".
+       numbers ('num'):  5   =5   !=0   >5   >=5   <20   <=20   5..20   5-20
+       times ('time'):   >14:00   <=15:30   14:00..15:30 (time of day)   >2026-11-18   18.11.2026
+                         2026-11-18 14:00..2026-11-18 16:00   >-2h   >-30m   >-1d (relative to now)
+       text (default):   abc (contains)   =abc (exactly)   !abc (does not contain)   !=abc   ^abc (starts)   abc$ (ends)
+     Times use the UTC / local switch. Anything that doesn't parse as a number or time is matched as text. */
+  HW.colFilter = function (expr, type) {
+    var parts = String(expr || '').split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+    if (!parts.length) return null;
+    var cmp = function (op, a, b) { return op === '>' ? a > b : op === '>=' ? a >= b : op === '<' ? a < b : op === '<=' ? a <= b : op === '!=' ? a !== b : a === b; };
+    var utc = function () { return HW.tz === 'utc'; };
+    var tod = function (sec) { var t = HW.parts(sec * 1000); return t.h * 60 + t.m + t.s / 60; };
+    // "HH:MM" -> minutes of the day; a date (with or without time) -> [start, end] in epoch seconds; "-2h" -> epoch
+    var ptime = function (s) {
+      var m = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(s);
+      if (m) return { tod: +m[1] * 60 + +m[2] + (+m[3] || 0) / 60 };
+      m = /^-(\d+(?:\.\d+)?)\s*(s|m|min|h|d)$/i.exec(s);
+      if (m) return { abs: Date.now() / 1000 - +m[1] * { s: 1, m: 60, min: 60, h: 3600, d: 86400 }[m[2].toLowerCase()] };
+      m = /^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T](\d{1,2}):(\d{2}))?$/.exec(s) || /^(\d{1,2})\.(\d{1,2})\.(\d{4})(?:\s+(\d{1,2}):(\d{2}))?$/.exec(s);
+      if (!m) return null;
+      var y = m[1].length === 4 ? +m[1] : +m[3], mo = +m[2] - 1, d = m[1].length === 4 ? +m[3] : +m[1], hasT = m[4] != null;
+      var mk = function (h, mi) { return (utc() ? Date.UTC(y, mo, d, h, mi) : new Date(y, mo, d, h, mi).getTime()) / 1000; };
+      return hasT ? { abs: mk(+m[4], +m[5]), end: mk(+m[4], +m[5]) + 60 } : { abs: mk(0, 0), end: mk(0, 0) + 86400 };
+    };
+    var one = function (p) {
+      var lo = p.toLowerCase();
+      if (type === 'num' || type === 'time') {
+        var r = /^(.+?)\s*\.\.\s*(.+)$/.exec(p) || (type === 'num' ? /^(-?\d+(?:\.\d+)?)\s*-\s*(-?\d+(?:\.\d+)?)$/.exec(p) : null);
+        var om = /^(>=|<=|!=|>|<|=)?\s*(.+)$/.exec(p), op = r ? null : om[1] || '=', v = r ? null : om[2];
+        if (type === 'num') {
+          if (r && !isNaN(parseFloat(r[1])) && !isNaN(parseFloat(r[2]))) { var a = parseFloat(r[1]), b = parseFloat(r[2]); return function (t, n) { return n != null && n >= Math.min(a, b) && n <= Math.max(a, b); }; }
+          var x = parseFloat(v); if (!r && !isNaN(x) && /^-?\d+(\.\d+)?\s*%?$/.test(v)) return function (t, n) { return n != null && cmp(op, Math.round(n * 1000) / 1000, x); };
+        } else {
+          if (r) { var A = ptime(r[1].trim()), B = ptime(r[2].trim());
+            if (A && B && A.tod != null && B.tod != null) return function (t, n) { if (n == null) return false; var q = tod(n); return A.tod <= B.tod ? q >= A.tod && q <= B.tod : q >= A.tod || q <= B.tod; };
+            if (A && B && A.abs != null && B.abs != null) return function (t, n) { return n != null && n >= A.abs && n < (B.end || B.abs); }; }
+          var P = v && ptime(v.trim());
+          if (P && P.tod != null) return function (t, n) { return n != null && cmp(op, Math.floor(tod(n)), P.tod); };
+          if (P && P.abs != null) return function (t, n) { if (n == null) return false;
+            if (!P.end) return cmp(op, n, P.abs);                        // relative: -2h
+            var inn = n >= P.abs && n < P.end;                            // a day or a minute
+            return op === '=' ? inn : op === '!=' ? !inn : op === '>' ? n >= P.end : op === '>=' ? n >= P.abs : op === '<' ? n < P.abs : n < P.end; };
+        }
+      }
+      if (lo.indexOf('!=') === 0) { var ne = lo.slice(2).trim(); return function (t) { return t.toLowerCase() !== ne; }; }
+      if (lo[0] === '!') { var nc = lo.slice(1).trim(); return function (t) { return t.toLowerCase().indexOf(nc) < 0; }; }
+      if (lo[0] === '=') { var eq = lo.slice(1).trim(); return function (t) { return t.toLowerCase() === eq; }; }
+      if (lo[0] === '^') { var sw = lo.slice(1); return function (t) { return t.toLowerCase().indexOf(sw) === 0; }; }
+      if (lo.length > 1 && lo[lo.length - 1] === '$') { var ew = lo.slice(0, -1); return function (t) { var s = t.toLowerCase(); return s.slice(s.length - ew.length) === ew; }; }
+      return function (t) { return t.toLowerCase().indexOf(lo) >= 0; };
+    };
+    var fs = parts.map(one);
+    return function (t, n) { return fs.some(function (f) { return f(t, n); }); };
+  };
+  HW.FILTER_HELP = { num: '>5  <=20  5..20  !=0', time: '>14:00  14:00..15:30  >2026-11-18  >-2h', text: 'contains  =exact  !not  ^starts' };
+
   /* ------------------------------------------------------------ data table
      HW.table(el, {id, rows, columns:[{key, label, html(row), text(row), sort(row), align:'r', hide:true}],
                    rowKey(row), onRow(row), select:{map}, rowClass(row)})
      - click a header to sort, Filters adds a text filter per column, Columns shows / hides / reorders
-       (remembered per table); on narrow screens every row is a card so nothing hides off to the side */
+       (remembered per table); on narrow screens every row is a card so nothing hides off to the side
+     - filterRow:true: a search box over everything plus a filter field under every header that
+       understands HW.colFilter expressions; column type:'num' | 'time' (value from val(row) or sort(row)) */
   HW.table = function (el, o) {
     var key = 'tbl_' + o.id, st = HW.lsj(key, { order: null, hidden: null, sort: null, dir: 1 });
     var cols = o.columns, byKey = {}; cols.forEach(function (c) { byKey[c.key] = c; });
     if (!st.order || st.order.length !== cols.length || st.order.some(function (k) { return !byKey[k]; })) st.order = cols.map(function (c) { return c.key; });
     if (!st.hidden) st.hidden = cols.filter(function (c) { return c.hide; }).map(function (c) { return c.key; });
-    el._tf = el._tf || {}; el._showF = el._showF || false;
+    el._tf = el._tf || {}; el._showF = el._showF || false; el._q = el._q || '';
+    var FR = !!o.filterRow;
+    var num = function (c, r) { var v = c.val ? c.val(r) : c.sort ? c.sort(r) : parseFloat(txt(c, r)); return v == null || v === '' || isNaN(v) ? null : +v; };
     var save = function () { HW.ls(key, st); };
     var txt = function (c, r) { return c.text ? String(c.text(r) == null ? '' : c.text(r)) : String(r[c.key] == null ? '' : r[c.key]); };
     function vis() { return st.order.map(function (k) { return byKey[k]; }).filter(function (c) { return st.hidden.indexOf(c.key) < 0; }); }
     function rows() {
-      var list = o.rows.filter(function (r) { return Object.keys(el._tf).every(function (k) { var f = (el._tf[k] || '').toLowerCase().trim(); return !f || !byKey[k] || txt(byKey[k], r).toLowerCase().indexOf(f) >= 0; }); });
+      var list;
+      if (FR) {
+        var fl = Object.keys(el._tf).filter(function (k) { return byKey[k]; }).map(function (k) { var c = byKey[k]; return [c, HW.colFilter(el._tf[k], c.type)]; }).filter(function (x) { return x[1]; });
+        var words = el._q.toLowerCase().split(/\s+/).filter(Boolean);
+        list = o.rows.filter(function (r) {
+          if (!fl.every(function (x) { return x[1](txt(x[0], r), x[0].type ? num(x[0], r) : null); })) return false;
+          if (!words.length) return true;
+          var all = cols.map(function (c) { return txt(c, r); }).join(' ').toLowerCase() + (o.searchText ? ' ' + String(o.searchText(r)).toLowerCase() : '');
+          return words.every(function (w) { return all.indexOf(w) >= 0; }); });
+      } else list = o.rows.filter(function (r) { return Object.keys(el._tf).every(function (k) { var f = (el._tf[k] || '').toLowerCase().trim(); return !f || !byKey[k] || txt(byKey[k], r).toLowerCase().indexOf(f) >= 0; }); });
       if (st.sort && byKey[st.sort]) { var c = byKey[st.sort], sv = c.sort || function (r) { var t = txt(c, r), n = parseFloat(t); return isNaN(n) || /[a-z]/i.test(t.replace(/ms|%/g, '')) ? t.toLowerCase() : n; };
         list = list.slice().sort(function (a, b) { var x = sv(a), y = sv(b); return (x > y ? 1 : x < y ? -1 : 0) * st.dir; }); }
       return list;
     }
     function render() {
       var V = vis(), L = rows(), narrow = el.clientWidth && el.clientWidth < 640 || innerWidth < 640, sel = o.select;
-      var bar = '<div class="row" style="margin-bottom:8px"><span class="small muted">' + L.length + (L.length !== o.rows.length ? ' of ' + o.rows.length : '') + ' rows</span><span class="grow"></span>' +
+      var anyF = Object.keys(el._tf).some(function (k) { return el._tf[k]; });
+      var bar = FR ? '<div class="row" style="margin-bottom:8px"><div class="search tsearch">' + HW.icon('search') + '<input data-q placeholder="Search everything" value="' + esc(el._q) + '"></div>' +
+        '<span class="small muted">' + L.length + (L.length !== o.rows.length ? ' of ' + o.rows.length : '') + ' rows</span>' + (anyF || el._q ? '<button class="btn-xs btn-g" data-t="x">Clear</button>' : '') + '<span class="grow"></span>' +
+        (narrow ? '<button class="btn-xs' + (el._showF || anyF ? ' btn-p' : '') + '" data-t="f">' + HW.icon('filter') + 'Column filters</button>' : '') + '<button class="btn-xs" data-t="c">' + HW.icon('layers') + 'Columns</button></div>'
+        : '<div class="row" style="margin-bottom:8px"><span class="small muted">' + L.length + (L.length !== o.rows.length ? ' of ' + o.rows.length : '') + ' rows</span><span class="grow"></span>' +
         '<button class="btn-xs' + (el._showF || Object.keys(el._tf).some(function (k) { return el._tf[k]; }) ? ' btn-p' : '') + '" data-t="f">' + HW.icon('filter') + 'Filters</button><button class="btn-xs" data-t="c">' + HW.icon('layers') + 'Columns</button></div>';
-      var filt = el._showF ? '<div class="form" style="margin-bottom:8px">' + V.map(function (c) { return '<div class="field"><label>' + esc(c.label) + '</label><input data-f="' + c.key + '" value="' + esc(el._tf[c.key] || '') + '" placeholder="contains…"></div>'; }).join('') + '</div>' : '';
+      var ph = function (c) { return FR ? HW.FILTER_HELP[c.type || 'text'] : 'contains…'; };
+      var tip = FR ? ' title="Comma = or. Numbers: >5 <=20 5..20 !=0 · Times: >14:00, 14:00..15:30, >2026-11-18, 18.11.2026, >-2h · Text: contains, =exact, !not, ^starts, ends$"' : '';
+      var filt = el._showF && (!FR || narrow) ? '<div class="form" style="margin-bottom:8px">' + V.map(function (c) { return '<div class="field"><label>' + esc(c.label) + '</label><input data-f="' + c.key + '" value="' + esc(el._tf[c.key] || '') + '" placeholder="' + esc(ph(c)) + '"' + tip + '></div>'; }).join('') + '</div>' : '';
       var body;
       if (!L.length) body = '<div class="empty">' + (o.empty || 'Nothing here.') + '</div>';
       else if (narrow) body = '<div class="tcards">' + L.map(function (r, i) {
         return '<div class="tcard' + (o.onRow ? ' click' : '') + (sel && sel[o.rowKey(r)] ? ' sel' : '') + '" data-i="' + i + '">' + (sel ? '<input type="checkbox" data-s="' + esc(o.rowKey(r)) + '"' + (sel[o.rowKey(r)] ? ' checked' : '') + '>' : '') +
           '<dl>' + V.map(function (c) { return '<dt>' + esc(c.label) + '</dt><dd>' + (c.html ? c.html(r) : esc(txt(c, r))) + '</dd>'; }).join('') + '</dl></div>'; }).join('') + '</div>';
       else body = '<div class="tw"><table class="table"><thead><tr>' + (sel ? '<th class="w0"><input type="checkbox" data-all></th>' : '') +
-        V.map(function (c) { return '<th class="srt' + (c.align === 'r' ? ' r' : '') + '" data-k="' + c.key + '"' + (c.minw ? ' style="min-width:' + c.minw + 'px"' : '') + '>' + esc(c.label) + (st.sort === c.key ? (st.dir > 0 ? ' ▲' : ' ▼') : '') + '</th>'; }).join('') + '</tr></thead><tbody>' +
+        V.map(function (c) { return '<th class="srt' + (c.align === 'r' ? ' r' : '') + '" data-k="' + c.key + '"' + (c.minw ? ' style="min-width:' + c.minw + 'px"' : '') + '>' + esc(c.label) + (st.sort === c.key ? (st.dir > 0 ? ' ▲' : ' ▼') : '') + '</th>'; }).join('') + '</tr>' +
+        (FR ? '<tr class="fr">' + (sel ? '<th class="w0"></th>' : '') + V.map(function (c) { return '<th><input data-f="' + c.key + '" value="' + esc(el._tf[c.key] || '') + '" placeholder="' + esc(ph(c)) + '"' + tip + ' class="' + (el._tf[c.key] ? 'on' : '') + '"></th>'; }).join('') + '</tr>' : '') + '</thead><tbody>' +
         L.map(function (r, i) { return '<tr data-i="' + i + '" class="' + (o.onRow ? 'click' : '') + (sel && sel[o.rowKey(r)] ? ' sel' : '') + (o.rowClass ? ' ' + o.rowClass(r) : '') + '">' + (sel ? '<td class="w0"><input type="checkbox" data-s="' + esc(o.rowKey(r)) + '"' + (sel[o.rowKey(r)] ? ' checked' : '') + '></td>' : '') +
           V.map(function (c) { return '<td' + (c.align === 'r' ? ' class="r"' : c.nowrap ? ' class="w0"' : '') + '>' + (c.html ? c.html(r) : esc(txt(c, r))) + '</td>'; }).join('') + '</tr>'; }).join('') + '</tbody></table></div>';
-      var ae = document.activeElement, fk = ae && el.contains(ae) && ae.dataset ? ae.dataset.f : null, pos = fk ? ae.selectionStart : 0;
+      var ae = document.activeElement, fk = ae && el.contains(ae) && ae.dataset ? (ae.dataset.q != null ? '__q' : ae.dataset.f) : null, pos = fk ? ae.selectionStart : 0;
       var sx = el.querySelector('.tw') ? el.querySelector('.tw').scrollLeft : 0;
       el.innerHTML = bar + filt + body;
-      if (fk) { var nf = el.querySelector('[data-f="' + fk + '"]'); if (nf) { nf.focus(); nf.setSelectionRange(pos, pos); } }   // live refresh keeps the filter you type in
+      if (fk) { var nf = el.querySelector(fk === '__q' ? '[data-q]' : '[data-f="' + fk + '"]'); if (nf) { nf.focus(); nf.setSelectionRange(pos, pos); } }   // live refresh keeps the filter you type in
       if (sx && el.querySelector('.tw')) el.querySelector('.tw').scrollLeft = sx;
-      el.querySelector('[data-t=f]').onclick = function () { el._showF = !el._showF; render(); };
+      if (el.querySelector('[data-t=f]')) el.querySelector('[data-t=f]').onclick = function () { el._showF = !el._showF; render(); };
+      if (el.querySelector('[data-t=x]')) el.querySelector('[data-t=x]').onclick = function () { el._tf = {}; el._q = ''; render(); };
+      var qi = el.querySelector('[data-q]');
+      if (qi) qi.oninput = function () { el._q = qi.value; var p = qi.selectionStart; render(); var n = el.querySelector('[data-q]'); if (n) { n.focus(); n.setSelectionRange(p, p); } };
       el.querySelector('[data-t=c]').onclick = function () { colMenu(this); };
       [].forEach.call(el.querySelectorAll('[data-f]'), function (i) { i.oninput = function () { el._tf[i.dataset.f] = i.value; var p = i.selectionStart, k = i.dataset.f; render(); var n = el.querySelector('[data-f="' + k + '"]'); if (n) { n.focus(); n.setSelectionRange(p, p); } }; });
       [].forEach.call(el.querySelectorAll('th.srt'), function (th) { th.onclick = function () { var k = th.dataset.k;
