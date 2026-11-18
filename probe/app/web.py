@@ -218,12 +218,14 @@ def api_mtr_start(h, q, _):
         raise ValueError("at most 100 targets at once")
     a = h.app
     mode = b.get("mode", "icmp")
+    # "cross": the hub asks for it because another site's automatic MTR started (for comparison)
+    trig = "cross" if b.get("trig") == "cross" else "manual"
     ids = []
     for host in hosts:
         m = mode
         if m == "tcp_if_open":
             m = "tcp" if (a.mtr.tcp.get(host) or {}).get("state") in ("open", "refused") else "icmp"
-        ids.append(a.mtr.request(host, m, b.get("port"), b.get("cycles"), "manual", b.get("note") or None))
+        ids.append(a.mtr.request(host, m, b.get("port"), b.get("cycles"), trig, str(b.get("note") or "")[:200] or None))
     return {"ids": ids}
 
 

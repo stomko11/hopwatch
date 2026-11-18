@@ -23,6 +23,7 @@ class App:
         self.cfg, self.auth = cfg, auth
         self.cache = hub.Cache()
         self.started = time.time()
+        self.cross = hub.CrossCapture(cfg)
 
 
 class Handler(httpbase.Handler):
@@ -380,6 +381,11 @@ def api_probe_test(h, q, _):
     return {"site": info["site"], "version": info["version"], "targets": len(cfg["targets"])}
 
 
+def api_cross(h, q, _):
+    """What cross-site MTR did lately (newest first)."""
+    return {"log": list(h.app.cross.log), "config": h.app.cfg.get()["cross"]}
+
+
 ROUTES = {
     ("GET", "/api/info"): (api_info, "public"),
     ("GET", "/api/live"): (api_live, "view"),
@@ -394,6 +400,7 @@ ROUTES = {
     ("GET", "/api/config"): (api_config_get, "admin"),
     ("PUT", "/api/config"): (api_config_put, "admin"),
     ("POST", "/api/probes/test"): (api_probe_test, "admin"),
+    ("GET", "/api/cross"): (api_cross, "view"),
 }
 ROUTES.update(httpbase.COMMON_ROUTES)
 Handler.routes = ROUTES

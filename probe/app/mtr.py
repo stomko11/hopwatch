@@ -50,7 +50,8 @@ def report_text(result: dict, meta: dict) -> str:
         f"MTR from {meta.get('site') or 'probe'}" + (f" (public IP {meta['public_ip']})" if meta.get("public_ip") else ""),
         f"Target:  {meta['host']}" + (f"  [{meta['location']}]" if meta.get("location") and meta["location"] != meta["host"] else ""),
         f"Mode:    {mode}, {meta['cycles']} cycles, {meta['interval']} s interval",
-        f"Start:   {started.strftime('%Y-%m-%d %H:%M:%S')} UTC" + (f"  (automatic: {meta['reason']})" if meta.get("trig") == "auto" else ""),
+        f"Start:   {started.strftime('%Y-%m-%d %H:%M:%S')} UTC" + (f"  (automatic: {meta['reason']})" if meta.get("trig") == "auto" else
+                                                                         f"  (cross-site: {meta['reason']})" if meta.get("trig") == "cross" else ""),
         "",
     ]
     rows = []
@@ -116,7 +117,7 @@ class MtrRunner:
             self.store.db.execute("UPDATE mtr SET status='error', error='stopped by a restart' WHERE status IN ('queued','running')")
 
     # ---------------------------------------------------------------- queue
-    PRIORITY = {"manual": 0, "auto": 1, "schedule": 2}     # who goes first when runs have to wait
+    PRIORITY = {"manual": 0, "auto": 1, "cross": 1, "schedule": 2}     # who goes first when runs have to wait
 
     def request(self, host, mode="icmp", port=None, cycles=None, trig="manual", reason=None, schedule=None) -> int:
         c = self.cfg.get()

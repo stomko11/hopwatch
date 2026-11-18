@@ -37,7 +37,9 @@ def main():
     signal.signal(signal.SIGTERM, lambda *_: os._exit(0))
     signal.signal(signal.SIGINT, lambda *_: os._exit(0))
     log.info("Hopwatch Hub %s, data in %s", VERSION, data)
-    web.serve(web.App(cfg, Auth(data, cfg)), int(os.environ.get("HOPWATCH_PORT", "8090")), os.environ.get("HOPWATCH_BIND", ""))
+    app = web.App(cfg, Auth(data, cfg))
+    app.cross.start()
+    web.serve(app, int(os.environ.get("HOPWATCH_PORT", "8090")), os.environ.get("HOPWATCH_BIND", ""))
 
 
 if __name__ == "__main__":

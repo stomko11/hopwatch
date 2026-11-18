@@ -18,7 +18,7 @@
     path: ['One site only', 'warn', 'Only one site sees it: the path from that site to the target'],
     site: ['Site link', 'purple', 'One site sees it on many targets at once: that site\u2019s own uplink or ISP'] };
   var SIG = { loss: 'loss', jitter: 'jitter', delay: 'delay' };
-  var TRIG = { manual: ['Manual', 'info'], auto: ['Automatic', 'warn'], schedule: ['Scheduled', 'purple'] };
+  var TRIG = { manual: ['Manual', 'info'], auto: ['Automatic', 'warn'], schedule: ['Scheduled', 'purple'], cross: ['Cross-site', 'info'] };
 
   function admin() { return S.info && S.info.auth.admin; }
   function every(fn, ms) { fn(); S.timers.push(setInterval(fn, ms)); }
@@ -440,18 +440,21 @@
         var hubs = (r.result && r.result.report && r.result.report.hubs) || [], v = HW.mtrVerdict(hubs);
         head(r.host + ' from ' + r.probe_name, r.location + ' · ' + modeName(r) + ' · ' + r.cycles + ' cycles · ' + HW.fdt(r.started || r.created), '<a class="btn-s btn-g" href="#/mtr">' + I('route') + 'All runs</a>');
         var t = r.started || r.created;
-        if (!others) { others = []; api('/api/mtr?limit=200&host=' + encodeURIComponent(r.host) + '&from=' + Math.floor(t - 1800) + '&to=' + Math.ceil(t + 1800)).then(function (x) {
-          others = x.runs.filter(function (o) { return !(o.probe === r.probe && o.id === r.id) && o.status === 'done'; }); draw(); }); }
+        var place = function (x) { return String(x.location || '').split(' · ')[0]; };
+        if (!others) { others = []; api('/api/mtr?limit=500&from=' + Math.floor(t - 1800) + '&to=' + Math.ceil(t + 1800)).then(function (x) {
+          // the same IP from the other sites first, then the other IPs of the same location (any site)
+          others = x.runs.filter(function (o) { return !(o.probe === r.probe && o.id === r.id) && o.status === 'done' && (o.host === r.host || place(o) === place(r)); })
+            .sort(function (a, b) { return (a.host === r.host ? 0 : 1) - (b.host === r.host ? 0 : 1) || Math.abs((a.started || a.created) - t) - Math.abs((b.started || b.created) - t); }); draw(); }); }
         var cmpHubs = cmp && cmp.result ? cmp.result.report.hubs : null;
         $('main').innerHTML = '<div class="kpis">' + kpi('server', 'Site', esc(r.probe_name), '') + kpi('info', 'Status', statusPill(r), r.error ? esc(r.error) : '') +
           kpi('alert', 'Loss at target', r.dst_loss == null ? '–' : HW.fnum(r.dst_loss) + '%', (hubs.length || '') + ' hops') + kpi('clock', 'Trigger', trigPill(r), esc(r.reason || '')) + '</div>' +
           (r.status === 'running' || r.status === 'queued' ? '<div class="card"><div class="bd"><b>' + (r.status === 'queued' ? 'Waiting for a free slot on ' + esc(r.probe_name) + '…' : 'Tracing from ' + esc(r.probe_name) + '…') + '</b><div class="mt8">' + HW.mtrProgress(r, 1) + '</div></div></div>' : '') +
           (v ? '<div class="banner ' + (v.level === 'ok' ? 'info' : v.level) + '">' + I(v.level === 'ok' ? 'check' : 'alert') + esc(v.text) + '</div>' : '') +
-          '<div class="card"><div class="hd"><h2>Same target from other sites</h2><span class="sub">runs within 30 minutes · pick one to put it next to this one</span></div><div class="bd">' +
-          (others && others.length ? '<div class="row gap4">' + others.map(function (o, k) { return '<button class="btn-s' + (cmp && cmp.id === o.id && cmp.probe === o.probe ? ' btn-p' : '') + '" data-o="' + k + '">' + esc(o.probe_name) + ' · ' + HW.fdt(o.started || o.created) + ' · ' + modeName(o) + ' · ' + (o.dst_loss == null ? '' : HW.fnum(o.dst_loss) + '% loss') + '</button>'; }).join('') + '</div>'
+          '<div class="card"><div class="hd"><h2>Compare with</h2><span class="sub">runs within 30 minutes: this IP from the other sites, then the other IPs of ' + esc(place(r)) + ' · pick one to put it next to this one</span></div><div class="bd">' +
+          (others && others.length ? '<div class="row gap4">' + others.map(function (o, k) { return '<button class="btn-s' + (cmp && cmp.id === o.id && cmp.probe === o.probe ? ' btn-p' : '') + '" data-o="' + k + '">' + (o.host !== r.host ? '<span class="mono">' + esc(o.host) + '</span> · ' : '') + esc(o.probe_name) + ' · ' + esc((TRIG[o.trig] || [o.trig])[0]) + ' · ' + HW.fdt(o.started || o.created) + ' · ' + modeName(o) + ' · ' + (o.dst_loss == null ? '' : HW.fnum(o.dst_loss) + '% loss') + '</button>'; }).join('') + '</div>'
             : '<div class="small muted">' + (others ? 'None. Use <b>MTR from all sites</b> to get one from every site at the same moment.' : 'Looking…') + '</div>') + '</div></div>' +
           (hubs.length ? '<div class="card"><div class="hd"><h2>Hops</h2><span class="grow"></span><button class="btn-s btn-p" id="copy">' + I('copy') + 'Copy for support</button><a class="btn btn-s" href="/api/run/file?probe=' + encodeURIComponent(pid) + '&id=' + id + '">' + I('download') + '.txt</a></div><div class="bd">' +
-            (cmpHubs ? '<div class="cmp"><div><div class="small muted" style="margin-bottom:6px">' + esc(r.probe_name) + '</div>' + hopTable(hubs, cmpHubs) + '</div><div><div class="small muted" style="margin-bottom:6px">' + esc(cmp.probe_name) + ' · ' + HW.fdt(cmp.started) + '</div>' + hopTable(cmpHubs, hubs) + '</div></div>' : hopTable(hubs)) + '</div></div>' : '') +
+            (cmpHubs ? '<div class="cmp"><div><div class="small muted" style="margin-bottom:6px">' + esc(r.probe_name) + ' · ' + esc(r.host) + '</div>' + hopTable(hubs, cmpHubs) + '</div><div><div class="small muted" style="margin-bottom:6px">' + esc(cmp.probe_name) + ' · ' + esc(cmp.host) + ' · ' + HW.fdt(cmp.started) + '</div>' + hopTable(cmpHubs, hubs) + '</div></div>' : hopTable(hubs)) + '</div></div>' : '') +
           (r.report ? '<div class="card"><div class="hd"><h2>Text for support</h2></div><div class="bd"><pre class="rep" id="rep"></pre></div></div>' : '');
         if (r.report) $('rep').textContent = r.report + (cmp && cmp.report ? '\n\n' + cmp.report : '');
         if ($('copy')) $('copy').onclick = function () { HW.copy(r.report + (cmp && cmp.report ? '\n\n' + cmp.report : ''), cmp ? 'Both reports' : 'Report'); };
@@ -514,7 +517,17 @@
           HW.sw('cuL', k.use_loss, 'Packet loss', '') + '<div class="form"><div class="field"><label>Loss over (%)</label><input type="number" id="cL" value="' + k.loss + '"></div></div>' +
           HW.sw('cuJ', k.use_jitter, 'Jitter', '') + '<div class="form"><div class="field"><label>Jitter over (ms)</label><input type="number" id="cJ" value="' + k.jitter + '"></div></div>' +
           HW.sw('cuD', k.use_delay, 'Delay', 'compared with each site\u2019s own normal for that target') + '<div class="form"><div class="field"><label>Delay over normal + (ms)</label><input type="number" id="cD" value="' + k.delay + '"></div></div>' +
-          '<div><button class="btn-p" id="cSave">' + I('check') + 'Save</button></div></div></div>';
+          '<div><button class="btn-p" id="cSave">' + I('check') + 'Save</button></div></div></div>' +
+          '<div class="card"><div class="hd"><h2>Cross-site MTR</h2><span class="sub">something to compare when only one site sees a problem</span></div><div class="bd col gap12">' +
+          HW.sw('xOn', cfg.cross.enabled, 'When a probe starts an automatic MTR, the other probes trace the same target too', 'A probe that has its own run to that target within 5 minutes (it saw the problem as well) is left alone') +
+          '<div class="form"><div class="field"><label>Cooldown per target (min)</label><input type="number" id="xC" min="0" max="1440" value="' + cfg.cross.cooldown_min + '"></div>' +
+          '<div class="field"><label>At most per hour</label><input type="number" id="xH" min="1" max="500" value="' + cfg.cross.max_per_hour + '"><span class="hint">requests across all targets</span></div></div>' +
+          '<div><button class="btn-p" id="xSave">' + I('check') + 'Save</button></div><div id="xLog"></div></div></div>';
+        $('xSave').onclick = function () { cfg.cross = { enabled: $('xOn').checked, cooldown_min: +$('xC').value, max_per_hour: +$('xH').value }; save(cfg); };
+        api('/api/cross').then(function (x) {
+          $('xLog').innerHTML = '<div class="small muted" style="margin-bottom:6px">Latest</div>' + (x.log.length ? '<div class="tw"><table class="table"><thead><tr><th>When</th><th>Target</th><th>Problem seen by</th><th>Other sites</th></tr></thead><tbody>' + x.log.map(function (e) {
+            return '<tr><td class="small">' + HW.fdt(e.t) + '</td><td class="mono small">' + esc(e.host) + '</td><td>' + esc(e.from) + '</td><td class="small">' + (e.note ? '<span class="warn">' + esc(e.note) + '</span>' : e.results.map(function (r) { return '<b>' + esc(r[0]) + '</b>: ' + esc(r[1] || ''); }).join(' · ')) + '</td></tr>'; }).join('') + '</tbody></table></div>'
+            : '<div class="small muted">Nothing yet since the hub started.</div>'); }).catch(function () { /* optional */ });
         $('cSave').onclick = function () { cfg.correlate = { min_sites: +$('cK').value, site_share: +$('cS').value, use_loss: $('cuL').checked, loss: +$('cL').value, use_jitter: $('cuJ').checked, jitter: +$('cJ').value, use_delay: $('cuD').checked, delay: +$('cD').value }; try { localStorage.removeItem('hw_hth'); } catch (e) { /* private mode */ } save(cfg); };
       }
       if (tab === 'security') {

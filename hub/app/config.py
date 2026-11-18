@@ -6,7 +6,7 @@ import re
 import secrets
 import threading
 
-VERSION = "0.2.6"
+VERSION = "0.2.7"
 
 DEFAULTS = {
     "name": "Hopwatch Hub",
@@ -15,6 +15,9 @@ DEFAULTS = {
     # min_sites 0 = all sites that answer (follows the number of probes)
     "correlate": {"min_sites": 0, "loss": 1.0, "jitter": 10.0, "delay": 50.0,
                   "use_loss": True, "use_jitter": False, "use_delay": False, "site_share": 50},
+    # Cross-site MTR: when one probe starts an automatic MTR, the others trace the same target too,
+    # so there is something to compare (unless they already have a run of their own around then)
+    "cross": {"enabled": True, "cooldown_min": 15, "max_per_hour": 30},
     "security": {"password_hash": "", "view_requires_login": False, "cors_origins": "", "tokens": []},
 }
 
@@ -50,6 +53,14 @@ def validate(cfg: dict) -> dict:
         raise ConfigError("correlation: site share must be 1 to 100 %")
     for f in ("use_loss", "use_jitter", "use_delay"):
         k[f] = bool(k[f])
+    x = c["cross"]
+    try:
+        x["cooldown_min"], x["max_per_hour"] = int(x["cooldown_min"]), int(x["max_per_hour"])
+    except (TypeError, ValueError):
+        raise ConfigError("cross-site MTR: not a number")
+    if not 0 <= x["cooldown_min"] <= 1440 or not 1 <= x["max_per_hour"] <= 500:
+        raise ConfigError("cross-site MTR: cooldown 0–1440 min, 1–500 per hour")
+    x["enabled"] = bool(x["enabled"])
     seen, probes = set(), []
     for p in c.get("probes") or []:
         name = str(p.get("name") or "").strip()[:40]

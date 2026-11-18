@@ -12,7 +12,7 @@
   };
   var NAV = [['overview', 'grid', 'Overview'], ['charts', 'chart', 'Charts'], ['mtr', 'route', 'MTR'], ['events', 'bell', 'Events'],
     ['evidence', 'box', 'Evidence'], ['settings', 'gear', 'Settings']];
-  var TRIG = { manual: ['Manual', 'info'], auto: ['Automatic', 'warn'], schedule: ['Scheduled', 'purple'] };
+  var TRIG = { manual: ['Manual', 'info'], auto: ['Automatic', 'warn'], schedule: ['Scheduled', 'purple'], cross: ['Cross-site', 'info'] };
   var STATUS = { ok: 'OK', warn: 'Warning', crit: 'Critical', down: 'Down', unknown: 'Waiting', disabled: 'Off' };
   var RANK = { down: 4, crit: 3, warn: 2, unknown: 1, ok: 0, disabled: -1 };
   var markColor = function (trig) { return trig === 'auto' ? HW.cssv('--warn') : trig === 'schedule' ? HW.cssv('--purple') : HW.cssv('--accent'); };
@@ -438,7 +438,7 @@
   function vRun(id) {
     head('MTR run #' + id, '', '');
     $('main').innerHTML = '<div class="card"><div class="empty">Loading…</div></div>';
-    var cmp = false, prev = null;
+    var cmp = null, prev = null;     // cmp: the run shown next to this one
     function hopTable(hubs, other) {
       var mx = Math.max.apply(null, hubs.map(function (h) { return h.Wrst || 0; }).concat([1]));
       var oip = other ? other.map(function (h) { return HW.hopIp(h.host); }) : null;
@@ -457,6 +457,7 @@
           '<a class="btn-s btn-g" href="#/mtr">' + I('route') + 'All runs</a>');
         var v = HW.mtrVerdict(hubs), el = (r.started ? Date.now() / 1000 - r.started : 0), est = r.cycles * ((S.cfg && S.cfg.mtr.interval_s) || 1) + 5;
         var hp = prev && prev.result ? (prev.result.report || {}).hubs || [] : null;
+        var ch = cmp && cmp.result ? (cmp.result.report || {}).hubs || [] : null;
         var same = hp && hp.length === hubs.length && hp.every(function (h, i) { return HW.hopIp(h.host) === HW.hopIp(hubs[i].host); });
         $('main').innerHTML = '<div class="kpis">' +
           kpi('info', 'Status', statusPill(r), r.error ? '<span class="bad">' + esc(r.error) + '</span>' : r.finished && r.status === 'done' ? 'took ' + HW.fdur(r.finished - r.started) : '') +
@@ -467,9 +468,9 @@
           (v ? '<div class="banner ' + (v.level === 'ok' ? 'info' : v.level) + '">' + I(v.level === 'ok' ? 'check' : 'alert') + esc(v.text) + '</div>' : '') +
           (hubs.length ? '<div class="card"><div class="hd"><h2>Hops</h2>' + (hp ? '<span class="pill ' + (same ? 'ok' : 'warn') + '">' + (same ? 'same path as the previous run' : 'path differs from the previous run') + '</span>' : '') + '<span class="grow"></span>' +
             '<button class="btn-s btn-p" id="copy">' + I('copy') + 'Copy for support</button><button class="btn-s" id="dl">' + I('download') + 'Download</button>' +
-            (r.previous ? '<button class="btn-s" id="cmpB">' + I('layers') + (cmp ? 'Hide comparison' : 'Compare with previous') + '</button>' : '') +
+            '<button class="btn-s" id="cmpB">' + I('layers') + (cmp ? 'Hide comparison' : 'Compare with…') + '</button>' +
             (admin() ? '<button class="btn-s" id="again">' + I('refresh') + 'Run again</button>' : '') + '</div><div class="bd">' +
-            (cmp && prev ? '<div class="cmp"><div><div class="small muted" style="margin-bottom:6px">This run · ' + HW.fdt(r.started) + '</div>' + hopTable(hubs, hp) + '</div><div><div class="small muted" style="margin-bottom:6px"><a href="#/mtr/' + prev.id + '">Previous run #' + prev.id + '</a> · ' + HW.fdt(prev.started) + ' · ' + esc(TRIG[prev.trig][0]) + '</div>' + hopTable(hp, hubs) + '</div></div>' : hopTable(hubs)) +
+            (ch ? '<div class="cmp"><div><div class="small muted" style="margin-bottom:6px">This run · ' + esc(r.host) + ' · ' + HW.fdt(r.started) + '</div>' + hopTable(hubs, ch) + '</div><div><div class="small muted" style="margin-bottom:6px"><a href="#/mtr/' + cmp.id + '">#' + cmp.id + '</a> · ' + esc(cmp.host) + (cmp.host !== r.host ? ' (' + esc(cmp.location) + ')' : '') + ' · ' + HW.fdt(cmp.started) + ' · ' + esc((TRIG[cmp.trig] || [cmp.trig])[0]) + '</div>' + hopTable(ch, hubs) + '</div></div>' : hopTable(hubs)) +
             '</div></div>' : '') +
           (r.report ? '<div class="card"><div class="hd"><h2>Text for support</h2><span class="sub">the layout of mtr -rwbz, with who, what and when on top</span></div><div class="bd"><pre class="rep" id="rep"></pre></div></div>' : '');
         if (r.report) $('rep').textContent = r.report;
@@ -477,16 +478,40 @@
         if ($('dl')) $('dl').onclick = function () { HW.menu(this, [
           { label: 'Report as .txt', icon: 'download', onClick: function () { HW.download('/api/mtr/report/' + r.id); } },
           { label: 'Raw result as .json', icon: 'download', onClick: function () { HW.download('/api/mtr/export?format=json&ids=' + r.id); } },
-          { label: 'ZIP with both', icon: 'download', onClick: function () { HW.download('/api/mtr/export?format=zip&ids=' + r.id + (r.previous && cmp ? ',' + r.previous : '')); } }]); };
+          { label: 'ZIP with both', icon: 'download', onClick: function () { HW.download('/api/mtr/export?format=zip&ids=' + r.id + (cmp ? ',' + cmp.id : '')); } }]); };
         if ($('cancel')) $('cancel').onclick = function () { api('/api/mtr/cancel/' + r.id, { method: 'POST' }).then(draw); };
         if ($('again')) $('again').onclick = function () { api('/api/mtr', { method: 'POST', body: { hosts: [r.host], mode: r.mode, port: r.port, cycles: r.cycles } }).then(function (x) { location.hash = '#/mtr/' + x.ids[0]; }).catch(function (e) { HW.toast(e.message, true); }); };
-        if ($('cmpB')) $('cmpB').onclick = function () { cmp = !cmp; if (cmp && !prev) api('/api/mtr/' + r.previous).then(function (p) { prev = p; draw(); }); else draw(); };
+        if ($('cmpB')) $('cmpB').onclick = function () { if (cmp) { cmp = null; draw(); } else pickRun(r, function (x) { cmp = x; draw(); }); };
         if (r.previous && !prev) api('/api/mtr/' + r.previous).then(function (p) { prev = p; draw(); });
         if (running) { clearTimers(); S.timers.push(setTimeout(draw, 2500)); }
       }).catch(fail);
     }
     if (!S.cfg && admin()) api('/api/config').then(function (c) { S.cfg = c; });
     draw();
+  }
+
+  /* pick a run to put next to r: the previous one to the same IP, others of the same location
+     around that time (e.g. a second IP of the same DC), then everything else of that day */
+  function pickRun(r, done) {
+    var t = r.started || r.created, place = function (x) { return String(x.location || '').split(' · ')[0]; };
+    HW.modal('Compare with', '<div class="search" style="margin-bottom:8px">' + I('search') + '<input id="pkQ" placeholder="Filter by IP, location, trigger"></div><div id="pkL" class="col gap4" style="max-height:55vh;overflow:auto"><div class="small muted">Loading…</div></div>', '<button class="btn-g" id="pkX">Cancel</button>');
+    $('pkX').onclick = HW.closeModal;
+    api('/api/mtr?limit=500&status=done&from=' + Math.floor(t - 86400) + '&to=' + Math.ceil(t + 86400)).then(function (x) {
+      var runs = x.runs.filter(function (o) { return o.id !== r.id; });
+      var near = function (o) { return Math.abs((o.started || o.created) - t) <= 1800; };
+      var sec = [['Previous run to this IP', runs.filter(function (o) { return o.id === r.previous; })],
+        ['Same location, within 30 minutes', runs.filter(function (o) { return o.id !== r.previous && place(o) === place(r) && near(o); })],
+        ['Everything else that day', runs.filter(function (o) { return o.id !== r.previous && !(place(o) === place(r) && near(o)); })]];
+      var draw = function () {
+        var q = ($('pkQ').value || '').toLowerCase();
+        $('pkL').innerHTML = sec.map(function (s) { var l = s[1].filter(function (o) { return !q || (o.host + ' ' + o.location + ' ' + o.trig + ' ' + (o.reason || '')).toLowerCase().indexOf(q) >= 0; });
+          return l.length ? '<div class="xs muted" style="margin-top:8px">' + s[0] + '</div>' + l.slice(0, 80).map(function (o) {
+            return '<button class="btn-s btn-g pkr" data-pk="' + o.id + '"><span class="mono small">' + esc(o.host) + '</span><span class="small muted ell">' + esc(o.location) + ' · ' + HW.fdt(o.started || o.created) + ' · ' + esc((TRIG[o.trig] || [o.trig])[0]) + '</span>' +
+              '<span class="grow"></span><span class="small ' + (o.dst_loss >= 20 ? 'bad' : o.dst_loss > 0 ? 'warn' : 'ok') + '">' + (o.dst_loss == null ? '–' : HW.fnum(o.dst_loss) + '%') + '</span></button>'; }).join('') : ''; }).join('') || '<div class="small muted">No other finished runs that day.</div>';
+        [].forEach.call($('pkL').querySelectorAll('[data-pk]'), function (b) { b.onclick = function () { api('/api/mtr/' + b.dataset.pk).then(function (o) { HW.closeModal(); done(o); }); }; });
+      };
+      $('pkQ').oninput = draw; draw();
+    }).catch(function (e) { $('pkL').textContent = e.message; });
   }
 
   /* ------------------------------------------------------------ events */

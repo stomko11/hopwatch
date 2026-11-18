@@ -4,8 +4,10 @@ The probes keep their own history; the hub asks them over their API (with a toke
 nothing is stored twice and a probe that was offline still has its own data when it comes back.
 """
 import concurrent.futures as cf
+import collections
 import json
 import logging
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -223,3 +225,87 @@ def correlate(per_probe, names, th, min_sites, site_share=0.5, join_s=60):
         else:
             b["path"] += 1
     return {"step": step, "incidents": inc, "buckets": sorted([t, b["target"], b["path"], b["site"]] for t, b in buckets.items())}
+
+
+class CrossCapture:
+    """When a probe starts an automatic MTR, ask the other probes for the same trace at once.
+
+    A site that sees nothing still gives a clean run of the same moment to put next to the bad one,
+    which is what a DC asks for. A probe that has its own run to the target around then (it saw the
+    problem too) is left alone. Per target a cooldown, and an hourly cap across all targets."""
+    POLL_S = 15
+    NEAR_S = 300           # a probe's own run this close counts as "already has one"
+
+    def __init__(self, cfg, call_fn=None, each_fn=None):
+        self.cfg = cfg
+        self.call = call_fn or call
+        self.each = each_fn or each
+        self.since = time.time()
+        self.seen = {}                     # (probe id, run id) -> time seen
+        self.last = {}                     # host -> time of the last cross-site request
+        self.sent = collections.deque()    # times of requests, for the hourly cap
+        self.log = collections.deque(maxlen=30)
+
+    def start(self):
+        threading.Thread(target=self._loop, name="cross", daemon=True).start()
+
+    def _loop(self):
+        while True:
+            time.sleep(self.POLL_S)
+            try:
+                self.tick()
+            except Exception:
+                log.exception("cross-site MTR")
+
+    def tick(self, now=None):
+        now = now or time.time()
+        x = self.cfg.get()["cross"]
+        ps = [p for p in self.cfg.probes() if p["enabled"]]
+        if not x["enabled"] or len(ps) < 2:
+            return
+        for k in [k for k, t in self.seen.items() if t < now - 7200]:
+            del self.seen[k]
+        frm = max(self.since, now - 1800)
+        res = self.each(ps, lambda p: self.call(p, f"/api/mtr?trig=auto&limit=50&from={int(frm)}", timeout=10))
+        new = []
+        for p in ps:
+            for r in (res.get(p["id"]) or {}).get("runs", []):
+                k = (p["id"], r["id"])
+                if k not in self.seen:
+                    self.seen[k] = now
+                    new.append((r["created"], p, r))
+        for _, origin, r in sorted(new, key=lambda z: z[0]):
+            self._one(origin, r, ps, x, now)
+
+    def _one(self, origin, r, ps, x, now):
+        host = r["host"]
+        while self.sent and self.sent[0] < now - 3600:
+            self.sent.popleft()
+        if now - self.last.get(host, 0) < x["cooldown_min"] * 60:
+            return
+        if len(self.sent) >= x["max_per_hour"]:
+            self._note(now, host, origin, [], "hourly cap reached")
+            return
+        t0 = r["created"] - self.NEAR_S
+
+        def ask(p):
+            st = self.call(p, "/api/status", timeout=8)
+            if not any(t["host"] == host and t["enabled"] for t in st.get("targets", [])):
+                return "no such target"
+            own = self.call(p, f"/api/mtr?host={urllib.parse.quote(host)}&from={int(t0)}&limit=5", timeout=10)
+            if [o for o in own.get("runs", []) if o.get("status") != "failed"]:
+                return "has its own run"
+            body = {"hosts": [host], "mode": r.get("mode") or "icmp", "port": r.get("port"), "cycles": r.get("cycles"),
+                    "trig": "cross", "note": f"{origin['name']} saw a problem ({r.get('reason') or 'automatic'}), its run #{r['id']}"}
+            return "started #" + ",".join(str(i) for i in self.call(p, "/api/mtr", body, timeout=20).get("ids", []))
+        others = [p for p in ps if p["id"] != origin["id"]]
+        out = self.each(others, ask)
+        started = [p["name"] for p in others if str(out.get(p["id"], "")).startswith("started")]
+        self.last[host] = now
+        if started:
+            self.sent.append(now)
+        self._note(now, host, origin, [(p["name"], out.get(p["id"]) if not isinstance(out.get(p["id"]), dict)
+                                         else out[p["id"]].get("error")) for p in others])
+
+    def _note(self, now, host, origin, results, why=None):
+        self.log.appendleft({"t": now, "host": host, "from": origin["name"], "results": results, "note": why})

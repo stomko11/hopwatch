@@ -134,3 +134,46 @@ class ConfigTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CrossTest(unittest.TestCase):
+    """One probe's automatic MTR makes the others trace the same target, unless they have their own."""
+    def setUp(self):
+        self.runs = {"a": [], "b": [], "c": []}
+        self.posted = []
+        ps = [{"id": k, "name": k.upper(), "enabled": True} for k in "abc"]
+
+        class Cfg:
+            def get(s):
+                return {"cross": {"enabled": True, "cooldown_min": 15, "max_per_hour": 30}}
+
+            def probes(s):
+                return ps
+
+        def call(p, path, body=None, timeout=0):
+            if path == "/api/status":
+                return {"targets": [{"host": "h", "enabled": True}]}
+            if path == "/api/mtr" and body:
+                self.posted.append((p["id"], body["trig"]))
+                return {"ids": [99]}
+            if "host=" in path:
+                return {"runs": [r for r in self.runs[p["id"]] if r["host"] == "h"]}
+            return {"runs": [r for r in self.runs[p["id"]] if r["trig"] == "auto"]}
+
+        self.x = hub.CrossCapture(Cfg(), call, lambda ps, fn: {p["id"]: fn(p) for p in ps})
+        self.x.since = 0
+
+    def test_others_trace_unless_they_have_their_own(self):
+        self.runs["a"].append({"id": 1, "host": "h", "trig": "auto", "created": 1000, "status": "done", "mode": "icmp"})
+        self.runs["c"].append({"id": 7, "host": "h", "trig": "auto", "created": 1010, "status": "done", "mode": "icmp"})
+        self.x.tick(now=1020)
+        self.assertEqual(self.posted, [("b", "cross")])          # c saw it too: it has its own run
+        self.x.tick(now=1040)
+        self.assertEqual(len(self.posted), 1)                     # nothing new, nothing again
+
+    def test_cooldown_per_target(self):
+        self.runs["a"].append({"id": 1, "host": "h", "trig": "auto", "created": 1000, "status": "done", "mode": "icmp"})
+        self.x.tick(now=1020)
+        self.runs["a"].append({"id": 2, "host": "h", "trig": "auto", "created": 1100, "status": "done", "mode": "icmp"})
+        self.x.tick(now=1120)
+        self.assertEqual(sorted(self.posted), [("b", "cross"), ("c", "cross")])
