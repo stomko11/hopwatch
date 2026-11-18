@@ -210,9 +210,55 @@ class AutoMtrTest(unittest.TestCase):
         self.r.auto_last.clear()
         self.r.consider(self.host("192.0.2.2", 2), "L", self.c, self.p)      # hourly cap of 2 reached
         self.assertEqual(len(self.r.queue), 2)
-        run = self.r.store.mtr_get(self.r.queue[0])
+        run = self.r.store.mtr_get(self.r.queue[0][1])
         self.assertEqual((run["trig"], run["status"]), ("auto", "queued"))
         self.assertIn("loss 50%", run["reason"])
+
+
+class TriggerTest(AutoMtrTest):
+    def test_down_latency_recovery(self):
+        st = self.host("192.0.2.1", 50)
+        st.status = "down"
+        self.r.consider(st, "L", self.c, self.p)
+        self.assertEqual(self.r.store.mtr_get(self.r.queue[0][1])["reason"], "target down")
+        c = config.validate({**self.c, "auto_mtr": {**self.c["auto_mtr"], "on_latency": True, "latency_rise_ms": 50,
+                                                    "max_per_hour": 10}})
+        self.r.cfg = FakeCfg(c)
+        self.r._base["192.0.2.3"] = (20.0, time.time())
+        slow = pinger.HostState("192.0.2.3", 0, 100)
+        now = int(time.time())
+        for i in range(30):
+            slow.recent.append((now - 30 + i, 95.0))
+        self.r.consider(slow, "M", c, self.p)
+        self.assertIn("normal is 20 ms", self.r.store.mtr_get(self.r.queue[-1][1])["reason"])
+        self.r.on_status("192.0.2.2", "L", "down", "ok", c)      # same location, but its own cooldown key
+        self.assertEqual(self.r.store.mtr_get(self.r.queue[-1][1])["reason"], "recovered (was down)")
+        self.assertEqual(len(self.r.queue), 3)
+
+    def test_priority_and_pending(self):
+        a = self.r.request("192.0.2.1", trig="schedule", reason="base")
+        b = self.r.request("192.0.2.2", trig="manual")
+        self.assertEqual([q[1] for q in self.r.queue], [b, a])      # manual first
+        self.assertTrue(self.r.pending("192.0.2.1", "schedule"))
+        self.assertFalse(self.r.pending("192.0.2.1", "auto"))
+        self.assertTrue(self.r.cancel(a))
+        self.assertEqual(self.r.store.mtr_get(a)["status"], "cancelled")
+
+    def test_schedule_validation(self):
+        c = config.validate({"targets": [{"location": "A", "host": "192.0.2.1"}],
+                             "schedules": [{"name": "Baseline", "hosts": ["192.0.2.1", "198.51.100.7"], "every_min": 15}]})
+        self.assertEqual(c["schedules"][0]["hosts"], ["192.0.2.1"])
+        with self.assertRaises(config.ConfigError):
+            config.validate({"schedules": [{"name": "x", "every_min": 1}]})
+
+
+class MedianTest(unittest.TestCase):
+    def test_median(self):
+        s = store.Store(os.path.join(tempfile.mkdtemp(), "t.db"))
+        now = 1_800_000_000
+        recs = [(now - 7200 + i * 60, 60, 0, 10.0, 20.0 + (i % 3), 30.0, 1.0) for i in range(100)]
+        s.import_records("h", "m1", recs)
+        self.assertEqual(s.median_avg("h", 86400, now), 21.0)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,7 @@
+.git
+data
+unraid
+docs
+**/__pycache__
+**/*.pyc
+**/tests

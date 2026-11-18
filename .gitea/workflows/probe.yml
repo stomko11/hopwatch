@@ -8,7 +8,7 @@ name: probe
 on:
   push:
     branches: [main]
-    paths: ["probe/**", ".gitea/workflows/probe.yml"]
+    paths: ["probe/**", "ui/**", ".gitea/workflows/probe.yml"]
   workflow_dispatch:
 
 jobs:
@@ -31,7 +31,7 @@ jobs:
           IMG="$REGISTRY/$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')/hopwatch-probe"
           VER="$(sed -n 's/^VERSION = "\(.*\)"/\1/p' probe/app/config.py)-${GITHUB_SHA::7}"
           echo "$TOKEN" | docker login "$REGISTRY" -u "$ACTOR" --password-stdin
-          docker build --label org.opencontainers.image.version="$VER" -t "$IMG:latest" -t "$IMG:$VER" probe
+          docker build --label org.opencontainers.image.version="$VER" -t "$IMG:latest" -t "$IMG:$VER" -f probe/Dockerfile .
           docker push "$IMG:$VER"
           docker push "$IMG:latest"
           docker logout "$REGISTRY"

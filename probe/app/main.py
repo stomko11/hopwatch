@@ -44,6 +44,7 @@ def main():
 
     def on_alert(host, location, old, new, s):
         store.event("status", host=host, location=location, level=new, before=old, loss=s["loss"], avg=s["avg"])
+        mtr.on_status(host, location, old, new, cfg.get())
 
     pinger.on_alert = on_alert
     pinger.listeners.append(lambda st, loc, c: mtr.consider(st, loc, c, pinger))

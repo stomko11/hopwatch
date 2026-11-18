@@ -103,20 +103,26 @@ class MtrRunner:
         self.tcp_lock = threading.Lock()
         self.tcp_last = 0
         self.tcp_wake = threading.Event()
+        self._base = {}                  # host -> (normal latency, when computed)
 
     def start(self) -> None:
         threading.Thread(target=self._loop, name="mtr", daemon=True).start()
         threading.Thread(target=self._tcp_loop, name="tcpcheck", daemon=True).start()
+        threading.Thread(target=self._schedule_loop, name="schedules", daemon=True).start()
         # runs that were queued or running when the container stopped will not finish any more
         with self.store.lock:
             self.store.db.execute("UPDATE mtr SET status='error', error='stopped by a restart' WHERE status IN ('queued','running')")
 
     # ---------------------------------------------------------------- queue
-    def request(self, host, mode="icmp", port=None, cycles=None, trig="manual", reason=None) -> int:
+    PRIORITY = {"manual": 0, "auto": 1, "schedule": 2}     # who goes first when runs have to wait
+
+    def request(self, host, mode="icmp", port=None, cycles=None, trig="manual", reason=None, schedule=None) -> int:
         c = self.cfg.get()
         locs = {t["host"]: t["location"] for t in c["targets"]}
         if host not in locs:
             raise ValueError("MTR runs only to configured targets")
+        if mode == "tcp_if_open":
+            mode = "tcp" if (self.tcp.get(host) or {}).get("state") in ("open", "refused") else "icmp"
         if mode not in ("icmp", "tcp", "udp"):
             raise ValueError("mode must be icmp, tcp or udp")
         port = int(port or c["tcp_check"]["port"])
@@ -126,24 +132,33 @@ class MtrRunner:
         if not 5 <= cycles <= 1000:
             raise ValueError("cycles must be 5..1000")
         with self.lock:
-            if len(self.queue) >= 200:
+            if len(self.queue) >= 500:
                 raise ValueError("too many MTR runs waiting")
             rid = self.store.mtr_add(created=time.time(), host=host, location=locs[host], mode=mode,
                                      port=port if mode == "tcp" else None, cycles=cycles, trig=trig,
-                                     reason=reason, status="queued")
-            self.queue.append(rid)
+                                     reason=reason, status="queued", schedule=schedule)
+            self.queue.append((self.PRIORITY.get(trig, 0), rid, host, trig))
+            self.queue.sort()
         self.wake.set()
         return rid
 
+    def pending(self, host, trig=None) -> bool:
+        """Is a run to this host already waiting or running (optionally of one kind)?"""
+        with self.lock:
+            if any(q[2] == host and (trig is None or q[3] == trig) for q in self.queue):
+                return True
+            return any(v[1] == host and (trig is None or v[2] == trig) for v in self.running.values())
+
     def cancel(self, rid: int) -> bool:
         with self.lock:
-            if rid in self.queue:
-                self.queue.remove(rid)
-                self.store.mtr_update(rid, status="cancelled", finished=time.time())
-                return True
-            p = self.running.get(rid)
+            for q in self.queue:
+                if q[1] == rid:
+                    self.queue.remove(q)
+                    self.store.mtr_update(rid, status="cancelled", finished=time.time())
+                    return True
             if rid in self.running:
                 self.cancelled.add(rid)
+                p = self.running[rid][0]
                 if p:
                     p.terminate()
                 return True
@@ -151,7 +166,7 @@ class MtrRunner:
 
     def busy(self):
         with self.lock:
-            return {"queued": list(self.queue), "running": list(self.running)}
+            return {"queued": [q[1] for q in self.queue], "running": list(self.running)}
 
     def _loop(self) -> None:
         while True:
@@ -162,8 +177,8 @@ class MtrRunner:
                 with self.lock:
                     if not self.queue or len(self.running) >= par:
                         break
-                    rid = self.queue.pop(0)
-                    self.running[rid] = None
+                    _, rid, host, trig = self.queue.pop(0)
+                    self.running[rid] = [None, host, trig]
                 threading.Thread(target=self._run, args=(rid,), daemon=True).start()
 
     def _run(self, rid: int) -> None:
@@ -177,7 +192,7 @@ class MtrRunner:
         try:
             p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             with self.lock:
-                self.running[rid] = p
+                self.running[rid][0] = p
                 if rid in self.cancelled:    # cancelled between leaving the queue and starting
                     p.terminate()
             try:
@@ -211,35 +226,90 @@ class MtrRunner:
 
     # ---------------------------------------------------------------- automatic capture
     def consider(self, st, location, c, pinger) -> None:
-        """Called every second per target by the pinger. Starts an MTR when loss stays over the limit."""
+        """Called every second per target by the pinger. Starts an MTR when the target goes down, or when
+        loss or latency stays over the limits."""
         a = c["auto_mtr"]
         if not a["enabled"]:
             return
         from pinger import stats
-        win = pinger.window(st, a["window_s"])
-        if len(win) < max(5, a["window_s"] * 0.8 / pinger.period):
-            return
-        s = stats(win)
-        if s["loss"] is None or s["loss"] < a["loss_pct"]:
-            return
+        reason = None
+        if a["on_down"] and st.status == "down":
+            reason = "target down"
+        else:
+            win = pinger.window(st, a["window_s"])
+            if len(win) < max(5, a["window_s"] * 0.8 / pinger.period):
+                return
+            s = stats(win)
+            if s["loss"] is not None and s["loss"] >= a["loss_pct"]:
+                reason = f"loss {s['loss']:.0f}% over {a['window_s']} s"
+            elif a["on_latency"] and s["avg"] is not None:
+                if a["latency_ms"] and s["avg"] >= a["latency_ms"]:
+                    reason = f"latency {s['avg']:.0f} ms over {a['window_s']} s (limit {a['latency_ms']:.0f} ms)"
+                elif a["latency_rise_ms"]:
+                    base = self.baseline(st.host)
+                    if base is not None and s["avg"] >= base + a["latency_rise_ms"]:
+                        reason = f"latency {s['avg']:.0f} ms over {a['window_s']} s, normal is {base:.0f} ms"
+        if reason:
+            self.auto(st.host, location, reason, c)
+
+    def auto(self, host, location, reason, c, key_prefix="") -> None:
+        """Start an automatic run unless the cooldown or the hourly limit says no."""
+        a = c["auto_mtr"]
         now = time.time()
-        key = location if a["per_location"] else st.host
+        key = key_prefix + (location if a["per_location"] else host)
         if now - self.auto_last.get(key, 0) < a["cooldown_min"] * 60:
             return
         self.auto_times = [t for t in self.auto_times if now - t < 3600]
-        if len(self.auto_times) >= a["max_per_hour"]:
+        if len(self.auto_times) >= a["max_per_hour"] or self.pending(host, "auto"):
             return
-        mode = a["mode"]
-        if mode == "tcp_if_open":
-            mode = "tcp" if self.tcp.get(st.host, {}).get("state") in ("open", "refused") else "icmp"
         self.auto_last[key] = now
         self.auto_times.append(now)
-        reason = f"loss {s['loss']:.0f}% over {a['window_s']} s"
         try:
-            rid = self.request(st.host, mode=mode, trig="auto", reason=reason)
-            self.store.event("auto_mtr", host=st.host, location=location, level="info", mtr_id=rid, reason=reason)
+            rid = self.request(host, mode=a["mode"], trig="auto", reason=reason)
+            self.store.event("auto_mtr", host=host, location=location, level="info", mtr_id=rid, reason=reason)
         except ValueError as e:
             log.info("automatic MTR not started: %s", e)
+
+    def on_status(self, host, location, old, new, c) -> None:
+        """After an outage: one more run, so the evidence shows the path when it works again."""
+        a = c["auto_mtr"]
+        if a["enabled"] and a["on_recovery"] and new == "ok" and old in ("crit", "down"):
+            self.auto(host, location, f"recovered (was {old})", c, key_prefix="recovery:")
+
+    def baseline(self, host):
+        """Normal latency: median of the 1-minute averages of the last 24 hours, cached for 30 minutes."""
+        b = self._base.get(host)
+        if b and time.time() - b[1] < 1800:
+            return b[0]
+        v = self.store.median_avg(host, 86400)
+        self._base[host] = (v, time.time())
+        return v
+
+    # ---------------------------------------------------------------- periodic runs
+    def _schedule_loop(self) -> None:
+        last = {}                            # schedule id -> time of the last start
+        while True:
+            time.sleep(20)
+            try:
+                c = self.cfg.get()
+                now = time.time()
+                for sch in c["schedules"]:
+                    if not sch["enabled"] or not sch["hosts"]:
+                        continue
+                    if sch["id"] not in last:   # after a start: continue from the last run in the database
+                        last[sch["id"]] = self.store.mtr_last_schedule(sch["id"]) or 0
+                    if now - last[sch["id"]] < sch["every_min"] * 60:
+                        continue
+                    last[sch["id"]] = now
+                    for h in sch["hosts"]:
+                        if self.pending(h, "schedule"):     # the previous round is still going: skip
+                            continue
+                        try:
+                            self.request(h, sch["mode"], None, sch["cycles"], "schedule", sch["name"], schedule=sch["id"])
+                        except ValueError as e:
+                            log.info("scheduled MTR to %s not started: %s", h, e)
+            except Exception:
+                log.exception("schedule loop failed")
 
     # ---------------------------------------------------------------- TCP port check
     def tcp_check_now(self) -> None:

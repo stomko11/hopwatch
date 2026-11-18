@@ -1,510 +1,650 @@
-/* Hopwatch Probe web UI. Plain JavaScript, no build step. */
+/* Hopwatch Probe web UI (uses the shared kit in /ui/hw.js). */
 'use strict';
 (function () {
-  var $ = function (id) { return document.getElementById(id); };
-  var S = { info: null, status: null, cfg: null, view: 'overview', timers: [], hidden: {} };
-  var LS = function (k, v) { try { if (v === undefined) return localStorage.getItem('hw_' + k); localStorage.setItem('hw_' + k, v); } catch (e) { return null; } };
-  var TZ = LS('tz') || 'local';
-  var PAL = ['#4e9cf5', '#f5a524', '#2fbf71', '#e5484d', '#a970ff', '#16c1c8', '#ff7ab6', '#c3e14b', '#ff8a4c', '#7aa7ff',
-    '#5fd3a0', '#ffd166', '#ef476f', '#9b8cff', '#3fd0ff', '#f78fb3', '#b0e57c', '#ffb26b', '#8fb4ff', '#e6e6e6'];
-
-  function esc(t) { return String(t == null ? '' : t).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
-  function P2(n) { return (n < 10 ? '0' : '') + n; }
-  function parts(ms) { var d = new Date(ms), u = TZ === 'utc';
-    return { Y: u ? d.getUTCFullYear() : d.getFullYear(), M: (u ? d.getUTCMonth() : d.getMonth()) + 1, D: u ? d.getUTCDate() : d.getDate(),
-      h: u ? d.getUTCHours() : d.getHours(), m: u ? d.getUTCMinutes() : d.getMinutes(), s: u ? d.getUTCSeconds() : d.getSeconds() }; }
-  function fdt(sec) { if (!sec) return ''; var t = parts(sec * 1000); return t.D + '.' + t.M + '.' + t.Y + ' ' + P2(t.h) + ':' + P2(t.m) + ':' + P2(t.s) + (TZ === 'utc' ? ' UTC' : ''); }
-  function ftime(sec) { var t = parts(sec * 1000); return P2(t.h) + ':' + P2(t.m) + ':' + P2(t.s); }
-  function fnum(v, d) { return v == null ? '–' : (+v).toFixed(d == null ? 1 : d); }
-  function fdur(s) { s = Math.max(0, Math.round(s)); return s < 90 ? s + ' s' : s < 5400 ? Math.round(s / 60) + ' min' : s < 172800 ? (s / 3600).toFixed(1) + ' h' : Math.round(s / 86400) + ' d'; }
-  function toast(msg, err) { var t = $('toast'); t.textContent = msg; t.className = 'toast' + (err ? ' err' : ''); clearTimeout(toast.tm); toast.tm = setTimeout(function () { t.className = 'toast hidden'; }, 3500); }
-
-  function api(path, opt) {
-    opt = opt || {};
-    var o = { method: opt.method || 'GET', headers: { 'X-Hopwatch': '1' }, credentials: 'same-origin' };
-    if (opt.body !== undefined) { o.headers['Content-Type'] = 'application/json'; o.body = JSON.stringify(opt.body); }
-    return fetch(path, o).then(function (r) {
-      return r.text().then(function (txt) {
-        var j = null; try { j = txt ? JSON.parse(txt) : null; } catch (e) { j = { error: txt }; }
-        if (!r.ok) { var e = new Error((j && j.error) || ('HTTP ' + r.status)); e.status = r.status; throw e; }
-        return j;
-      });
-    });
-  }
-  function admin() { return S.info && S.info.auth.admin; }
+  var $ = HW.$, esc = HW.esc, I = HW.icon, api = HW.api;
+  var S = { info: null, status: null, cfg: null, timers: [], view: '' };
+  var NAV = [['overview', 'grid', 'Overview'], ['charts', 'chart', 'Charts'], ['mtr', 'route', 'MTR'], ['events', 'bell', 'Events'],
+    ['evidence', 'box', 'Evidence'], ['settings', 'gear', 'Settings']];
+  var TRIG = { manual: ['Manual', 'info'], auto: ['Automatic', 'warn'], schedule: ['Scheduled', 'purple'] };
+  var STATUS = { ok: 'OK', warn: 'Warning', crit: 'Critical', down: 'Down', unknown: 'Waiting', disabled: 'Off' };
+  var RANK = { down: 4, crit: 3, warn: 2, unknown: 1, ok: 0, disabled: -1 };
+  var markColor = function (trig) { return trig === 'auto' ? HW.cssv('--warn') : trig === 'schedule' ? HW.cssv('--purple') : HW.cssv('--accent'); };
 
   /* ------------------------------------------------------------ shell */
+  function admin() { return S.info && S.info.auth.admin; }
   function every(fn, ms) { fn(); S.timers.push(setInterval(fn, ms)); }
-  function clearTimers() { S.timers.forEach(clearInterval); S.timers = []; }
+  function clearTimers() { S.timers.forEach(function (t) { clearInterval(t); clearTimeout(t); }); S.timers = []; }
+  function head(title, sub, actions) { $('title').textContent = title; $('subtitle').innerHTML = sub || ''; $('topActions').innerHTML = actions || ''; }
+  function nav() {
+    $('nav').innerHTML = NAV.map(function (n) { return '<a href="#/' + n[0] + '" class="' + (S.view === n[0] ? 'on' : '') + '">' + I(n[1]) + '<span class="lbl">' + n[2] + '</span></a>'; }).join('');
+    $('loginBtn').innerHTML = admin() ? I('out') + 'Log out' : S.info && !S.info.auth.password_set ? I('lock') + 'Set password' : I('lock') + 'Log in';
+    $('themeBtn').innerHTML = I(document.documentElement.getAttribute('data-theme') === 'light' ? 'moon' : 'sun');
+  }
   function loadInfo() {
     return api('/api/info').then(function (i) {
-      S.info = i;
-      $('site').textContent = i.site;
-      document.title = 'Hopwatch Probe · ' + i.site;
-      $('loginBtn').textContent = i.auth.admin ? 'Log out' : (i.auth.password_set ? 'Log in' : 'Set password');
-      $('banner').className = i.error ? 'banner' : 'banner hidden';
-      $('banner').textContent = i.error || '';
-      return i;
+      S.info = i; $('site').textContent = i.site; document.title = 'Hopwatch Probe · ' + i.site;
+      var b = $('banner'); b.className = i.error ? 'banner' : 'hidden'; b.innerHTML = i.error ? I('alert') + esc(i.error) : '';
+      nav(); return i;
     });
   }
+  function fail(e) {
+    if (e && e.status === 401) return loadInfo().then(route);
+    var b = $('banner'); b.className = 'banner'; b.innerHTML = I('alert') + 'Cannot reach the probe: ' + esc(e && e.message);
+  }
   function route() {
-    clearTimers(); closeMenu();
-    var h = location.hash.replace(/^#\/?/, '').split('/');
-    var v = h[0] || 'overview';
-    S.view = v;
-    [].forEach.call(document.querySelectorAll('#nav a'), function (a) { a.className = a.dataset.v === v ? 'on' : ''; });
+    clearTimers(); HW.closePops(); HW.closeModal();
+    var h = location.hash.replace(/^#\/?/, '').split('?')[0].split('/');
+    S.view = h[0] || 'overview'; nav();
+    $('main').innerHTML = '';
     if (S.info && !S.info.auth.can_view) return loginBox(true);
-    if (S.info && !S.info.auth.password_set && v === 'settings') return setupBox();
-    ({ overview: viewOverview, charts: viewCharts, mtr: function () { h[1] ? viewMtrRun(+h[1]) : viewMtr(); },
-      events: viewEvents, settings: viewSettings }[v] || viewOverview)();
+    if (S.info && !S.info.auth.password_set && S.view === 'settings') return setup();
+    var v = { overview: vOverview, charts: vCharts, mtr: function () { h[1] ? vRun(+h[1]) : vMtr(); }, events: vEvents, evidence: vEvidence, settings: vSettings }[S.view] || vOverview;
+    v();
   }
-  function modal(html) { $('modalBox').innerHTML = html; $('modal').className = 'modal'; var f = $('modalBox').querySelector('input'); if (f) f.focus(); }
-  function closeModal() { $('modal').className = 'modal hidden'; }
-  $('modal').addEventListener('click', function (e) { if (e.target === $('modal')) closeModal(); });
-
-  function loginBox(required) {
-    modal('<h2>Log in</h2>' + (required ? '<div class="muted small">This probe needs a login to view.</div>' : '') +
-      '<label class="f">Password<input type="password" id="lpw" autocomplete="current-password"></label>' +
-      '<div class="row"><span class="grow"></span>' + (required ? '' : '<button id="lcancel">Cancel</button>') + '<button class="pri" id="lgo">Log in</button></div>' +
-      '<div class="muted small">Forgot it? Set the container variable HOPWATCH_RESET_PASSWORD to true and restart.</div>');
-    var go = function () {
-      api('/api/login', { method: 'POST', body: { password: $('lpw').value } }).then(function () { closeModal(); loadInfo().then(route); })
-        .catch(function (e) { toast(e.message, true); });
-    };
-    $('lgo').onclick = go; $('lpw').onkeydown = function (e) { if (e.key === 'Enter') go(); };
-    if ($('lcancel')) $('lcancel').onclick = closeModal;
-  }
-  function setupBox() {
-    $('main').innerHTML = '<section class="card"><h2>Welcome to Hopwatch Probe</h2>' +
-      '<p>Set an admin password first. It protects the settings and starting MTR runs. Viewing stays open unless you change that in Settings → Security.</p>' +
-      '<div class="form"><label class="f">New password<input type="password" id="np1" autocomplete="new-password"></label>' +
-      '<label class="f">Repeat<input type="password" id="np2" autocomplete="new-password"></label></div>' +
-      '<div class="row"><button class="pri" id="npgo">Set password</button></div></section>';
-    $('npgo').onclick = function () {
-      if ($('np1').value !== $('np2').value) return toast('The passwords differ', true);
-      api('/api/password', { method: 'POST', body: { new: $('np1').value } }).then(function () { toast('Password set'); loadInfo().then(route); })
-        .catch(function (e) { toast(e.message, true); });
-    };
-  }
+  function qs(k) { var m = new RegExp('[?&]' + k + '=([^&]+)').exec(location.hash); return m ? decodeURIComponent(m[1]) : null; }
+  HW.seg($('tzSeg'), [['local', 'Local'], ['utc', 'UTC']], HW.tz, function (v) { HW.tz = v; HW.ls('tz', v); route(); });
+  $('themeBtn').onclick = function () { HW.theme(document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light'); route(); };
   $('loginBtn').onclick = function () {
     if (admin()) api('/api/logout', { method: 'POST' }).then(function () { loadInfo().then(route); });
     else if (S.info && !S.info.auth.password_set) location.hash = '#/settings';
     else loginBox(false);
   };
-  function tzUi() { [].forEach.call(document.querySelectorAll('#tzSeg button'), function (b) { b.className = b.dataset.tz === TZ ? 'on' : ''; }); }
-  [].forEach.call(document.querySelectorAll('#tzSeg button'), function (b) { b.onclick = function () { TZ = b.dataset.tz; LS('tz', TZ); tzUi(); route(); }; });
-  tzUi();
-
-  /* ------------------------------------------------------------ MTR menu (tiles, rows) */
-  var menuEl = null;
-  function closeMenu() { if (menuEl) { menuEl.remove(); menuEl = null; } }
-  document.addEventListener('click', function (e) { if (menuEl && !menuEl.contains(e.target) && !e.target.closest('[data-mtr]')) closeMenu(); });
-  function mtrMenu(btn, hosts, tcp) {
-    closeMenu();
-    var port = (S.status && S.status.tcp_port) || 443;
-    var anyTcp = hosts.some(function (h) { var x = tcp[h]; return x && (x.state === 'open' || x.state === 'refused'); });
-    var m = document.createElement('div'); m.className = 'menu';
-    var items = [['icmp', 'MTR · ICMP']];
-    if (hosts.length > 1) items.push(['tcp_if_open', 'MTR · TCP ' + port + ' where it answers, else ICMP']);
-    else if (anyTcp) items.push(['tcp', 'MTR · TCP ' + port]);
-    m.innerHTML = items.map(function (it) { return '<button data-m="' + it[0] + '">' + esc(it[1]) + (hosts.length > 1 ? ' (' + hosts.length + ' IPs)' : '') + '</button>'; }).join('');
-    document.body.appendChild(m);
-    var r = btn.getBoundingClientRect();
-    m.style.left = Math.min(r.left, innerWidth - m.offsetWidth - 8) + 'px'; m.style.top = (r.bottom + scrollY + 4) + 'px';
-    m.onclick = function (e) {
-      var b = e.target.closest('button'); if (!b) return; closeMenu();
-      api('/api/mtr', { method: 'POST', body: { hosts: hosts, mode: b.dataset.m } }).then(function (r) {
-        toast(r.ids.length === 1 ? 'MTR started' : r.ids.length + ' MTR runs started');
-        if (r.ids.length === 1) location.hash = '#/mtr/' + r.ids[0];
-      }).catch(function (e) { toast(e.message, true); });
-    };
-    menuEl = m;
+  function loginBox(required) {
+    HW.modal('Log in', (required ? '<p class="muted">This probe needs a login to view.</p>' : '') +
+      '<div class="field"><label>Admin password</label><input type="password" id="lpw" autocomplete="current-password"></div>' +
+      '<p class="xs muted mt12">Forgot it? Set the container variable HOPWATCH_RESET_PASSWORD to true and restart the container.</p>',
+      '<button class="btn-p" id="lgo">Log in</button>');
+    var go = function () { api('/api/login', { method: 'POST', body: { password: $('lpw').value } }).then(function () { HW.closeModal(); loadInfo().then(route); }).catch(function (e) { HW.toast(e.message, true); }); };
+    $('lgo').onclick = go; $('lpw').onkeydown = function (e) { if (e.key === 'Enter') go(); };
   }
-  function busyChip(st) {
-    var b = $('busy'), n = st.mtr.running.length, q = st.mtr.queued.length;
-    b.className = n || q ? 'chip' : 'chip hidden';
-    b.innerHTML = 'MTR: ' + n + ' running' + (q ? ', ' + q + ' queued' : '');
-    b.onclick = function () { location.hash = '#/mtr'; };
+  function setup() {
+    head('Welcome', 'Set an admin password to start');
+    $('main').innerHTML = '<div class="card" style="max-width:560px"><div class="bd"><p>The admin password protects the settings and starting MTR runs. Viewing stays open unless you change that in Settings → Security.</p>' +
+      '<div class="form"><div class="field"><label>New password</label><input type="password" id="np1" autocomplete="new-password"></div><div class="field"><label>Repeat</label><input type="password" id="np2" autocomplete="new-password"></div></div>' +
+      '<div class="row mt16"><button class="btn-p" id="npgo">Set password</button><span class="xs muted">At least 8 characters</span></div></div></div>';
+    $('npgo').onclick = function () {
+      if ($('np1').value !== $('np2').value) return HW.toast('The passwords differ', true);
+      api('/api/password', { method: 'POST', body: { new: $('np1').value } }).then(function () { HW.toast('Password set'); loadInfo().then(route); }).catch(function (e) { HW.toast(e.message, true); });
+    };
+  }
+
+  /* ------------------------------------------------------------ shared data */
+  function status() { return api('/api/status').then(function (st) { S.status = st; return st; }); }
+  function tcpOk(t) { return t && t.tcp && (t.tcp.state === 'open' || t.tcp.state === 'refused'); }
+  function targetOpts(st, onlyOn) {
+    return (st || S.status).targets.filter(function (t) { return !onlyOn || t.enabled; }).map(function (t) {
+      return { value: t.host, label: t.host, group: t.location, hint: tcpOk(t) ? 'TCP ' + t.tcp.port : '' }; });
+  }
+  function locOpts(st) { var seen = {}; return (st || S.status).targets.filter(function (t) { if (seen[t.location]) return false; seen[t.location] = 1; return true; }).map(function (t) { return { value: t.location, label: t.location }; }); }
+  function tcpPort() { var t = ((S.status || {}).targets || []).filter(function (x) { return x.tcp; })[0]; return t ? t.tcp.port : 443; }
+
+  /* MTR start dialog, used everywhere */
+  function mtrDialog(hosts) {
+    if (!admin()) return loginBox(false);
+    var p = S.status ? Promise.resolve(S.status) : status();
+    Promise.all([p, S.cfg ? Promise.resolve(S.cfg) : api('/api/config')]).then(function (r) {
+      var st = r[0], cfg = S.cfg = r[1], mode = HW.ls('mtrMode') || 'icmp';
+      HW.modal('Run MTR', '<div class="col gap12">' +
+        '<div class="field"><label>Targets</label><div id="mdT"></div><span class="hint">Several targets run in parallel (at most ' + cfg.mtr.max_parallel + ' at once, the rest wait).</span></div>' +
+        '<div class="field"><label>Mode</label><span id="mdM"></span><span class="hint" id="mdH"></span></div>' +
+        '<div class="form"><div class="field"><label>TCP port</label><input type="number" id="mdP" value="' + cfg.tcp_check.port + '" min="1" max="65535"></div>' +
+        '<div class="field"><label>Cycles</label><input type="number" id="mdC" value="' + cfg.mtr.cycles + '" min="5" max="1000"><span class="hint" id="mdD"></span></div></div></div>',
+        '<button class="btn-g" id="mdX">Cancel</button><button class="btn-p" id="mdGo">' + I('play') + 'Start</button>');
+      var t = HW.ms($('mdT'), { options: targetOpts(st, true), value: hosts || [], placeholder: 'Pick targets…' });
+      var hint = { icmp: 'Classic ping-style trace. Works for every target.', tcp: 'SYN packets to the port. Gets through where ICMP is filtered or rate limited.',
+        udp: 'UDP packets, like traceroute on Linux.', tcp_if_open: 'TCP for targets where the port answered the daily check, ICMP for the others.' };
+      HW.seg($('mdM'), [['icmp', 'ICMP'], ['tcp', 'TCP'], ['udp', 'UDP'], ['tcp_if_open', 'TCP where it answers']], mode, function (v) { mode = v; $('mdH').textContent = hint[v]; });
+      $('mdH').textContent = hint[mode];
+      var dur = function () { $('mdD').textContent = 'About ' + HW.fdur(+$('mdC').value * cfg.mtr.interval_s + 5) + ' per target'; };
+      $('mdC').oninput = dur; dur();
+      $('mdX').onclick = HW.closeModal;
+      $('mdGo').onclick = function () {
+        var hs = t.get(); if (!hs.length) return HW.toast('Pick at least one target', true);
+        HW.ls('mtrMode', mode);
+        api('/api/mtr', { method: 'POST', body: { hosts: hs, mode: mode, port: +$('mdP').value, cycles: +$('mdC').value } }).then(function (r) {
+          HW.closeModal(); HW.toast(r.ids.length === 1 ? 'MTR started' : r.ids.length + ' MTR runs started');
+          location.hash = r.ids.length === 1 ? '#/mtr/' + r.ids[0] : '#/mtr';
+        }).catch(function (e) { HW.toast(e.message, true); });
+      };
+    }).catch(fail);
+  }
+  function quickMtr(hosts, mode) {
+    if (!admin()) return loginBox(false);
+    api('/api/mtr', { method: 'POST', body: { hosts: hosts, mode: mode } }).then(function (r) {
+      HW.toast(r.ids.length === 1 ? 'MTR started' : r.ids.length + ' MTR runs started');
+      if (r.ids.length === 1) location.hash = '#/mtr/' + r.ids[0];
+    }).catch(function (e) { HW.toast(e.message, true); });
   }
 
   /* ------------------------------------------------------------ overview */
-  var RANK = { down: 4, crit: 3, warn: 2, unknown: 1, ok: 0, disabled: -1 };
-  function viewOverview() {
-    $('main').innerHTML = '<section class="card"><h2>Targets <span id="sum" class="chip"></span><span class="muted small" id="win"></span></h2><div class="tiles" id="tiles"></div></section>';
+  function vOverview() {
+    head('Overview', 'Live status of every target over the alert window', '<button class="btn-p" id="runBtn">' + I('play') + 'Run MTR</button>');
+    $('runBtn').onclick = function () { mtrDialog([]); };
+    var f = HW.lsj('ovf', { q: '', only: 'all', locs: [] });
+    $('main').innerHTML = '<div class="kpis" id="kpis"></div>' +
+      '<div class="row"><div class="search" style="width:260px">' + I('search') + '<input id="ovQ" placeholder="Filter by name or IP" value="' + esc(f.q) + '"></div>' +
+      '<span id="ovOnly"></span><div id="ovLoc"></div><span class="grow"></span><span class="xs muted" id="ovUpd"></span></div><div class="tiles" id="tiles"></div>';
+    var spark = {}, mtr24 = null, locMs = null;
+    var save = function () { HW.ls('ovf', f); draw(); };
+    $('ovQ').oninput = function () { f.q = this.value; save(); };
+    HW.seg($('ovOnly'), [['all', 'All'], ['bad', 'Problems only']], f.only, function (v) { f.only = v; save(); });
+    function draw() {
+      var st = S.status; if (!st) return;
+      if (!locMs) locMs = HW.ms($('ovLoc'), { options: locOpts(st), value: f.locs, label: 'Locations', placeholder: 'All', onChange: function (v) { f.locs = v; save(); } });
+      var locs = {}, order = [];
+      st.targets.forEach(function (t) { if (!locs[t.location]) { locs[t.location] = []; order.push(t.location); } locs[t.location].push(t); });
+      var worstOf = function (ts) { return ts.reduce(function (a, t) { return RANK[t.status] > RANK[a] ? t.status : a; }, 'disabled'); };
+      var bad = order.filter(function (l) { return RANK[worstOf(locs[l])] >= 2; });
+      var on = st.targets.filter(function (t) { return t.enabled && t.avg != null; });
+      var med = on.map(function (t) { return t.avg; }).sort(function (a, b) { return a - b; })[on.length >> 1];
+      var lossy = st.targets.filter(function (t) { return t.loss > 0; }).length;
+      $('kpis').innerHTML =
+        kpi('server', 'Targets', st.targets.length, order.length + ' locations') +
+        kpi('alert', 'Locations with problems', '<span class="' + (bad.length ? 'bad' : 'ok') + '">' + bad.length + '</span>', bad.length ? esc(bad.slice(0, 3).join(', ')) + (bad.length > 3 ? '…' : '') : 'all fine') +
+        kpi('chart', 'Median latency', HW.fnum(med) + '<span class="small muted"> ms</span>', lossy + ' IPs with some loss') +
+        kpi('route', 'MTR runs, 24 h', mtr24 == null ? '…' : mtr24.n, (st.mtr.running.length ? st.mtr.running.length + ' running · ' : '') + (st.mtr.queued.length ? st.mtr.queued.length + ' waiting · ' : '') + (mtr24 ? mtr24.auto + ' automatic' : ''));
+      var q = f.q.toLowerCase();
+      var html = order.filter(function (l) {
+        if (f.locs.length && f.locs.indexOf(l) < 0) return false;
+        if (f.only === 'bad' && RANK[worstOf(locs[l])] < 2) return false;
+        return !q || l.toLowerCase().indexOf(q) >= 0 || locs[l].some(function (t) { return t.host.indexOf(q) >= 0; });
+      }).sort(function (a, b) { return RANK[worstOf(locs[b])] - RANK[worstOf(locs[a])] || a.localeCompare(b); }).map(function (l) {
+        var ts = locs[l], w = worstOf(ts), hosts = ts.filter(function (t) { return t.enabled; }).map(function (t) { return t.host; });
+        return '<div class="tile st-' + w + '"><div class="th"><span class="dot ' + w + '"></span><b class="ell">' + esc(l) + '</b>' +
+          (RANK[w] >= 2 ? '<span class="pill ' + w + '">' + STATUS[w] + '</span>' : '') + '<span class="grow"></span>' +
+          '<a class="btn-xs btn-g" href="#/charts?loc=' + encodeURIComponent(l) + '" title="Charts">' + I('chart') + '</a>' +
+          '<button class="btn-xs" data-lm="' + esc(JSON.stringify(hosts)) + '">' + I('route') + 'MTR</button></div>' +
+          ts.map(function (t) {
+            var sp = spark[t.host] || { v: [], l: [] };
+            return '<div class="ipr"><div class="ip"><span class="dot ' + t.status + (t.status === 'ok' ? ' live' : '') + '"></span><span class="ell" title="' + esc(t.host) + '">' + esc(t.host) + '</span>' + (tcpOk(t) ? '<span class="tag tcp" title="TCP ' + t.tcp.port + ' answers: TCP MTR possible">TCP</span>' : '') + '</div>' +
+              '<div>' + HW.spark(sp.v, sp.l, t.status === 'ok' ? 'var(--accent)' : 'var(--' + (t.status === 'warn' ? 'warn' : 'bad') + ')') + '</div>' +
+              '<div class="r">' + (t.status === 'down' ? '<span class="down">down</span>' : t.avg == null ? '<span class="faint">–</span>' : HW.fnum(t.avg) + '<span class="faint"> ms</span>') + '</div>' +
+              '<div class="r ' + (t.loss > 0 ? (RANK[t.status] >= 3 ? 'bad' : 'warn') : 'faint') + '">' + (t.loss == null ? '–' : HW.fnum(t.loss, 0) + '%') + '</div>' +
+              '<div class="r faint jit" title="jitter">±' + HW.fnum(t.jitter) + '</div>' +
+              '<div><button class="btn-xs btn-g btn-i" data-ip="' + esc(t.host) + '" title="Actions">' + I('more') + '</button></div></div>';
+          }).join('') + '</div>';
+      }).join('');
+      $('tiles').innerHTML = html || '<div class="card"><div class="empty">' + (st.targets.length ? 'Nothing matches the filter.' : 'No targets yet. Add them in <a href="#/settings">Settings</a>.') + '</div></div>';
+      $('ovUpd').textContent = 'last ' + st.window_s + ' s · updated ' + HW.ftime(st.now);
+      [].forEach.call($('tiles').querySelectorAll('[data-lm]'), function (b) {
+        b.onclick = function () { var hs = JSON.parse(b.dataset.lm); HW.menu(b, [
+          { label: 'MTR all ' + hs.length + ' IPs · ICMP', icon: 'play', onClick: function () { quickMtr(hs, 'icmp'); } },
+          { label: 'MTR all · TCP where it answers', icon: 'play', onClick: function () { quickMtr(hs, 'tcp_if_open'); } },
+          { label: 'MTR with options…', icon: 'gear', onClick: function () { mtrDialog(hs); } }]); };
+      });
+      [].forEach.call($('tiles').querySelectorAll('[data-ip]'), function (b) {
+        b.onclick = function () { var h = b.dataset.ip, t = st.targets.filter(function (x) { return x.host === h; })[0], items = [
+          { label: 'MTR · ICMP', icon: 'play', onClick: function () { quickMtr([h], 'icmp'); } }];
+          if (tcpOk(t)) items.push({ label: 'MTR · TCP ' + t.tcp.port, icon: 'play', onClick: function () { quickMtr([h], 'tcp'); } });
+          items.push({ label: 'MTR with options…', icon: 'gear', onClick: function () { mtrDialog([h]); } }, { sep: 1 },
+            { label: 'Chart of this IP', icon: 'chart', onClick: function () { location.hash = '#/charts?host=' + encodeURIComponent(h); } },
+            { label: 'MTR runs to this IP', icon: 'route', onClick: function () { location.hash = '#/mtr?host=' + encodeURIComponent(h); } },
+            { label: 'Copy IP', icon: 'copy', onClick: function () { HW.copy(h, 'IP'); } });
+          HW.menu(b, items); };
+      });
+    }
+    every(function () { status().then(draw).catch(fail); }, 3000);
     every(function () {
-      api('/api/status').then(function (st) {
-        S.status = st; busyChip(st);
-        var tcp = {}; st.targets.forEach(function (t) { if (t.tcp) { tcp[t.host] = t.tcp; st.tcp_port = t.tcp.port; } });
-        var locs = {}, order = [];
-        st.targets.forEach(function (t) { if (!locs[t.location]) { locs[t.location] = []; order.push(t.location); } locs[t.location].push(t); });
-        var bad = 0;
-        var html = order.map(function (l) {
-          var ts = locs[l], worst = ts.reduce(function (a, t) { return RANK[t.status] > RANK[a] ? t.status : a; }, 'disabled');
-          if (RANK[worst] >= 2) bad++;
-          var hosts = ts.filter(function (t) { return t.enabled; }).map(function (t) { return t.host; });
-          return '<div class="loc ' + worst + '"><div class="lh"><b title="' + esc(l) + '">' + esc(l) + '</b><span class="grow"></span>' +
-            '<a class="small" href="#/charts?loc=' + encodeURIComponent(l) + '">chart</a>' +
-            (admin() && hosts.length ? ' <button class="small" data-mtr="' + esc(JSON.stringify(hosts)) + '">MTR</button>' : '') + '</div>' +
-            '<table class="ips">' + ts.map(function (t) {
-              var tc = t.tcp && (t.tcp.state === 'open' || t.tcp.state === 'refused') ? '<span class="chip small" title="TCP ' + t.tcp.port + ' ' + t.tcp.state + ' – TCP MTR possible">tcp</span>' : '';
-              return '<tr><td class="ip"><span class="dot ' + t.status + '"></span>' + esc(t.host) + ' ' + tc + '</td>' +
-                '<td class="n">' + (t.status === 'down' ? '<span class="down">down</span>' : fnum(t.avg) + ' ms') + '</td>' +
-                '<td class="n ' + (t.loss > 0 ? (t.status === 'ok' ? 'warn' : t.status) : 'muted') + '">' + (t.loss == null ? '–' : fnum(t.loss, 0) + '%') + '</td>' +
-                '<td class="n muted" title="jitter">±' + fnum(t.jitter) + '</td>' +
-                (admin() && t.enabled ? '<td><button class="small" data-mtr="' + esc(JSON.stringify([t.host])) + '" title="MTR to ' + esc(t.host) + '">⋯</button></td>' : '<td></td>') + '</tr>';
-            }).join('') + '</table></div>';
-        }).join('');
-        $('tiles').innerHTML = html || '<p class="muted">No targets yet. Add them in <a href="#/settings">Settings</a>.</p>';
-        $('sum').textContent = st.targets.length + ' IPs · ' + (bad ? bad + ' locations with problems' : 'all OK');
-        $('sum').className = 'chip ' + (bad ? 'warn' : 'ok');
-        $('win').textContent = 'last ' + st.window_s + ' s · updated ' + ftime(st.now);
-        [].forEach.call($('tiles').querySelectorAll('[data-mtr]'), function (b) {
-          b.onclick = function (e) { e.stopPropagation(); mtrMenu(b, JSON.parse(b.dataset.mtr), tcp); };
-        });
-      }).catch(fail);
-    }, 2000);
+      var t1 = Date.now() / 1000;
+      api('/api/series?from=' + Math.floor(t1 - 900) + '&to=' + Math.ceil(t1) + '&points=60&group=host').then(function (d) {
+        d.series.forEach(function (s) { spark[s.host] = { v: s.points.map(function (p) { return p[1]; }), l: s.points.map(function (p) { return p[2]; }) }; }); draw();
+      }).catch(function () { /* sparklines are optional */ });
+    }, 15000);
+    every(function () {
+      api('/api/mtr?limit=2000&from=' + Math.floor(Date.now() / 1000 - 86400)).then(function (r) {
+        mtr24 = { n: r.runs.length, auto: r.runs.filter(function (x) { return x.trig === 'auto'; }).length }; draw(); }).catch(function () { /* optional */ });
+    }, 30000);
   }
-  function fail(e) { if (e.status === 401) return loadInfo().then(route); $('banner').className = 'banner'; $('banner').textContent = 'Cannot reach the probe: ' + e.message; }
+  function kpi(ic, l, v, s) { return '<div class="kpi"><div class="l">' + I(ic) + esc(l) + '</div><div class="v">' + v + '</div><div class="s">' + (s || '') + '</div></div>'; }
 
   /* ------------------------------------------------------------ charts */
-  var RANGES = [['15m', 900], ['1h', 3600], ['6h', 21600], ['24h', 86400], ['7d', 604800], ['30d', 2592000], ['90d', 7776000], ['1y', 31536000]];
-  var C = { range: +(LS('range') || 3600), zoom: null, loc: null };
-  function viewCharts() {
-    var qs = location.hash.split('?')[1] || ''; var m = /loc=([^&]+)/.exec(qs);
-    C.loc = m ? decodeURIComponent(m[1]) : (C.loc || '');
-    $('main').innerHTML = '<section class="card"><div class="row"><span class="seg" id="rg"></span>' +
-      '<button id="unzoom" class="small hidden"></button><span class="grow"></span>' +
-      '<label class="c small muted">Show <select id="locSel"><option value="">all locations</option></select></label></div>' +
-      '<div class="muted small" id="chInfo"></div></section>' +
-      ['rtt', 'loss', 'jit'].map(function (k) {
-        return '<section class="card"><h2>' + { rtt: 'Latency <span class="muted small">avg RTT, ms</span>', loss: 'Packet loss <span class="muted small">%, ▲ = MTR run</span>', jit: 'Jitter <span class="muted small">ms</span>' }[k] +
-          '</h2><canvas id="c_' + k + '"></canvas><div class="legend" id="l_' + k + '"></div></section>';
-      }).join('');
-    $('rg').innerHTML = RANGES.map(function (r) { return '<button data-r="' + r[1] + '">' + r[0] + '</button>'; }).join('');
-    [].forEach.call($('rg').children, function (b) { b.onclick = function () { C.range = +b.dataset.r; LS('range', C.range); C.zoom = null; load(); }; });
-    $('unzoom').onclick = function () { C.zoom = null; load(); };
-    api('/api/status').then(function (st) {
-      var seen = {}; st.targets.forEach(function (t) { if (!seen[t.location]) { seen[t.location] = 1; $('locSel').insertAdjacentHTML('beforeend', '<option>' + esc(t.location) + '</option>'); } });
-      $('locSel').value = C.loc; });
-    $('locSel').onchange = function () { C.loc = $('locSel').value; S.hidden = {}; load(); };
-    var load = function () {
-      [].forEach.call($('rg').children, function (b) { b.className = (!C.zoom && +b.dataset.r === C.range) ? 'on' : ''; });
-      var now = Date.now() / 1000, t0 = C.zoom ? C.zoom[0] : now - C.range, t1 = C.zoom ? C.zoom[1] : now;
-      $('unzoom').className = C.zoom ? 'small' : 'small hidden'; if (C.zoom) $('unzoom').textContent = fdt(t0) + ' – ' + fdt(t1) + '  ×';
-      var w = Math.max(300, Math.min(1500, $('c_rtt').clientWidth || 800));
-      var q = '/api/series?from=' + Math.floor(t0) + '&to=' + Math.ceil(t1) + '&points=' + Math.round(w / 2) +
-        (C.loc ? '&location=' + encodeURIComponent(C.loc) + '&group=host' : '&group=location');
-      Promise.all([api(q), api('/api/mtr?limit=500&from=' + Math.floor(t0) + '&to=' + Math.ceil(t1))]).then(function (r) {
+  var RANGES = [[900, '15m'], [3600, '1h'], [21600, '6h'], [86400, '24h'], [604800, '7d'], [2592000, '30d'], [7776000, '90d'], [31536000, '1y']];
+  function vCharts() {
+    var cf = HW.lsj('chf', { range: 3600, group: 'location', sel: [], marks: true });
+    if (qs('loc')) { cf.sel = ['loc:' + qs('loc')]; cf.group = 'host'; }
+    if (qs('host')) { cf.sel = [qs('host')]; cf.group = 'host'; }
+    head('Charts', 'Latency, loss and jitter over time · drag across a chart to zoom, double-click to go back',
+      '<button class="btn-s" id="csv">' + I('download') + 'CSV</button>');
+    $('main').innerHTML = '<div class="card"><div class="bd row gap12"><span id="rg"></span><div id="sel"></div><span id="grp"></span>' +
+      '<label class="switch"><input type="checkbox" id="mk"' + (cf.marks ? ' checked' : '') + '><span class="t">MTR marks</span></label><span class="grow"></span><span class="xs muted" id="res"></span></div></div>' +
+      [['rtt', 'Latency', 'average round-trip time, ms'], ['loss', 'Packet loss', '% of pings lost'], ['jit', 'Jitter', 'mean difference between pings, ms']].map(function (c) {
+        return '<div class="card"><div class="hd"><h2>' + c[1] + '</h2><span class="sub">' + c[2] + '</span></div><div class="bd"><div id="c_' + c[0] + '"><div class="empty" style="height:240px;display:flex;align-items:center;justify-content:center">Loading…</div></div></div></div>'; }).join('');
+    var win = cf.custom ? { from: cf.custom[0], to: cf.custom[1] } : { range: cf.range };
+    var hidden = { rtt: {}, loss: {}, jit: {} };
+    var rp = HW.rangePicker($('rg'), RANGES, win, function (w) { win = w.range ? { range: w.range } : w; cf.custom = w.range ? null : [w.from, w.to]; if (w.range) cf.range = w.range; HW.ls('chf', cf); load(); });
+    HW.seg($('grp'), [['location', 'Per location'], ['host', 'Per IP']], cf.group, function (v) { cf.group = v; HW.ls('chf', cf); load(); });
+    $('mk').onchange = function () { cf.marks = this.checked; HW.ls('chf', cf); load(); };
+    status().then(function (st) {
+      var opts = locOpts(st).map(function (l) { return { value: 'loc:' + l.value, label: 'All of ' + l.label, group: 'Locations' }; }).concat(targetOpts(st));
+      HW.ms($('sel'), { options: opts, value: cf.sel, label: 'Show', placeholder: 'everything', onChange: function (v) { cf.sel = v; HW.ls('chf', cf); load(); } });
+      load();
+    }).catch(fail);
+    function params() {
+      var w = rp.get(), hosts = cf.sel.filter(function (x) { return x.indexOf('loc:') !== 0; }), locs = cf.sel.filter(function (x) { return x.indexOf('loc:') === 0; }).map(function (x) { return x.slice(4); });
+      return { w: w, q: 'from=' + Math.floor(w.from) + '&to=' + Math.ceil(w.to) + (hosts.length ? '&host=' + encodeURIComponent(hosts.join(',')) : '') + (locs.length ? '&location=' + encodeURIComponent(locs.join(',')) : '') };
+    }
+    $('csv').onclick = function () { HW.download('/api/series.csv?' + params().q + '&points=5000'); };
+    function load() {
+      var p = params(), w = p.w, W = ($('c_rtt').clientWidth || 900);
+      Promise.all([api('/api/series?' + p.q + '&points=' + Math.round(W / 2) + '&group=' + cf.group),
+        cf.marks ? api('/api/mtr?limit=1000&from=' + Math.floor(w.from) + '&to=' + Math.ceil(w.to)) : Promise.resolve({ runs: [] })]).then(function (r) {
         var d = r[0], runs = r[1].runs;
-        $('chInfo').textContent = (C.loc ? C.loc + ' – per IP' : 'all locations – average of their IPs') + ' · resolution ' + fdur(d.step) +
-          ' (' + { raw: 'every ping', m1: '1-minute', m5: '5-minute' }[d.tier] + ' data) · drag to zoom, double-click to go back';
-        var mk = function (col) { return d.series.map(function (s) { return { name: s.name, t: s.points.map(function (p) { return p[0]; }), v: s.points.map(function (p) { return p[col]; }) }; }); };
-        var opts = { t0: t0, t1: t1, onZoom: function (a, b) { C.zoom = [a, b]; load(); }, onReset: function () { if (C.zoom) { C.zoom = null; load(); } } };
-        chart('c_rtt', 'l_rtt', mk(1), 'ms', opts);
-        chart('c_loss', 'l_loss', mk(2), '%', Object.assign({ marks: runs, pct: true }, opts));
-        chart('c_jit', 'l_jit', mk(3), 'ms', opts);
+        $('res').textContent = 'resolution ' + HW.fdur(d.step) + ' · ' + { raw: 'every ping', m1: '1-minute data', m5: '5-minute data' }[d.tier];
+        var mk = function (col) { return d.series.map(function (s) { return { name: s.name, t: s.points.map(function (x) { return x[0]; }), v: s.points.map(function (x) { return x[col]; }) }; }); };
+        var marks = runs.map(function (m) { return { t: m.started || m.created, color: markColor(m.trig), label: 'MTR ' + m.host + ' · ' + TRIG[m.trig][0] + (m.reason ? ' · ' + m.reason : ''), id: m.id }; });
+        var o = function (k, unit, pct) { return { t0: w.from, t1: w.to, unit: unit, pct: pct, hidden: hidden[k], marks: marks,
+          onMark: function (m) { location.hash = '#/mtr/' + m.id; },
+          onZoom: function (a, b) { rp.set({ from: a, to: b }); win = { from: a, to: b }; cf.custom = [a, b]; HW.ls('chf', cf); load(); },
+          onReset: function () { if (cf.custom) { cf.custom = null; rp.set({ range: cf.range }); win = { range: cf.range }; HW.ls('chf', cf); load(); } } }; };
+        HW.chart($('c_rtt'), mk(1), o('rtt', 'ms'));
+        HW.chart($('c_loss'), mk(2), o('loss', '%', true));
+        HW.chart($('c_jit'), mk(3), o('jit', 'ms'));
       }).catch(fail);
-    };
-    load();
-    S.timers.push(setInterval(function () { if (!C.zoom) load(); }, 15000));
+    }
+    S.timers.push(setInterval(function () { if (!cf.custom) load(); }, 15000));
     window.onresize = function () { if (S.view === 'charts') load(); };
-  }
-  function color(name) { var k = 'c_' + name; if (!color[k]) color[k] = PAL[Object.keys(color).length % PAL.length]; return color[k]; }
-  function chart(cid, lid, ser, unit, o) {
-    var cv = $(cid); if (!cv) return;
-    var dpr = window.devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight;
-    cv.width = W * dpr; cv.height = H * dpr;
-    var c = cv.getContext('2d'); c.setTransform(dpr, 0, 0, dpr, 0, 0); c.clearRect(0, 0, W, H);
-    var L = 46, R = 10, T = 10, B = 22, vis = ser.filter(function (s) { return !S.hidden[cid + s.name]; });
-    var max = 0; vis.forEach(function (s) { s.v.forEach(function (v) { if (v != null && v > max) max = v; }); });
-    max = o.pct ? Math.max(5, Math.min(100, Math.ceil(max / 5) * 5)) : (max ? max * 1.12 : 10);
-    var X = function (t) { return L + (t - o.t0) / (o.t1 - o.t0) * (W - L - R); }, Y = function (v) { return T + (1 - v / max) * (H - T - B); };
-    c.font = '11px system-ui'; c.lineWidth = 1;
-    for (var i = 0; i <= 4; i++) { var v = max * i / 4, y = Y(v); c.strokeStyle = '#243040'; c.beginPath(); c.moveTo(L, y); c.lineTo(W - R, y); c.stroke(); c.fillStyle = '#8796a8'; c.fillText(v.toFixed(v < 10 ? 1 : 0), 4, y + 4); }
-    var span = o.t1 - o.t0;
-    for (var k = 0; k <= 5; k++) { var tt = o.t0 + span * k / 5, p = parts(tt * 1000); var lab = span > 172800 ? p.D + '.' + p.M + ' ' + P2(p.h) + ':' + P2(p.m) : P2(p.h) + ':' + P2(p.m); c.fillStyle = '#8796a8'; c.fillText(lab, Math.min(Math.max(X(tt) - 18, L), W - R - 60), H - 6); }
-    vis.forEach(function (s) {
-      c.strokeStyle = color(s.name); c.lineWidth = 1.5; c.beginPath(); var pen = false;
-      s.v.forEach(function (v, i) { if (v == null) { pen = false; return; } var x = X(s.t[i]), y = Y(Math.min(v, max)); if (pen) c.lineTo(x, y); else { c.moveTo(x, y); pen = true; } });
-      c.stroke();
-    });
-    (o.marks || []).forEach(function (m) { var x = X(m.started || m.created); if (x < L || x > W - R) return; c.fillStyle = m.trig === 'auto' ? '#f5a524' : '#4e9cf5';
-      c.beginPath(); c.moveTo(x, T); c.lineTo(x - 5, T + 8); c.lineTo(x + 5, T + 8); c.fill(); });
-    var lg = $(lid); lg.innerHTML = '';
-    ser.forEach(function (s) {
-      var b = document.createElement('button'); b.className = S.hidden[cid + s.name] ? 'off' : '';
-      b.innerHTML = '<i style="background:' + color(s.name) + '"></i>' + esc(s.name);
-      b.onclick = function (e) {
-        if (e.detail >= 2) { var only = ser.every(function (x) { return x.name === s.name ? !S.hidden[cid + x.name] : S.hidden[cid + x.name]; });
-          ser.forEach(function (x) { if (only) delete S.hidden[cid + x.name]; else S.hidden[cid + x.name] = x.name !== s.name; }); }
-        else S.hidden[cid + s.name] = !S.hidden[cid + s.name];
-        chart(cid, lid, ser, unit, o);
-      };
-      lg.appendChild(b);
-    });
-    var drag = null, tip = $('tip');
-    cv.onmousedown = function (e) { var x = e.clientX - cv.getBoundingClientRect().left; if (x >= L) drag = x; };
-    cv.onmouseup = function (e) {
-      if (drag == null) return; var x = e.clientX - cv.getBoundingClientRect().left, a = Math.min(drag, x), b = Math.max(drag, x); drag = null;
-      if (b - a < 6) {   // a click: open an MTR mark near the pointer
-        var hit = (o.marks || []).filter(function (m) { return Math.abs(X(m.started || m.created) - x) < 6; })[0];
-        if (hit) location.hash = '#/mtr/' + hit.id; return; }
-      var f = function (px) { return o.t0 + (Math.max(L, Math.min(W - R, px)) - L) / (W - L - R) * span; };
-      o.onZoom(f(a), Math.max(f(b), f(a) + 60));
-    };
-    cv.ondblclick = o.onReset;
-    cv.onmouseleave = function () { tip.className = 'tip hidden'; drag = null; };
-    cv.onmousemove = function (e) {
-      var r = cv.getBoundingClientRect(), x = e.clientX - r.left; if (x < L || x > W - R) { tip.className = 'tip hidden'; return; }
-      var t = o.t0 + (x - L) / (W - L - R) * span, rows = [], at = null;
-      vis.forEach(function (s) { var bi = -1, bd = 1e18; for (var i = 0; i < s.t.length; i++) { var d = Math.abs(s.t[i] - t); if (d < bd) { bd = d; bi = i; } }
-        if (bi >= 0 && s.v[bi] != null) { rows.push([s.name, s.v[bi]]); at = s.t[bi]; } });
-      rows.sort(function (a, b) { return b[1] - a[1]; });
-      var near = (o.marks || []).filter(function (m) { return Math.abs(X(m.started || m.created) - x) < 6; });
-      tip.innerHTML = '<b>' + fdt(at || t) + '</b>' + rows.slice(0, 20).map(function (r) { return '<br><i class="dot" style="background:' + color(r[0]) + '"></i>' + esc(r[0]) + ': ' + fnum(r[1], o.pct ? 1 : 1) + ' ' + unit; }).join('') +
-        (rows.length > 20 ? '<br><span class="muted">+' + (rows.length - 20) + ' more</span>' : '') +
-        near.map(function (m) { return '<br>▲ MTR ' + esc(m.host) + ' (' + esc(m.trig) + ') – click to open'; }).join('');
-      tip.className = 'tip'; tip.style.left = Math.min(e.clientX + 14, innerWidth - 300) + 'px'; tip.style.top = Math.min(e.clientY + 14, innerHeight - tip.offsetHeight - 8) + 'px';
-    };
   }
 
   /* ------------------------------------------------------------ MTR */
-  function modeName(r) { return r.mode === 'tcp' ? 'TCP ' + r.port : r.mode.toUpperCase(); }
-  function statusChip(r) {
-    var cls = { done: 'ok', running: 'warn', queued: '', error: 'bad', cancelled: '' }[r.status];
-    var txt = r.status;
-    if (r.status === 'running' && r.started) txt += ' · ' + fdur(Date.now() / 1000 - r.started);
-    return '<span class="chip ' + cls + '">' + esc(txt) + '</span>';
+  function trigPill(r) { var t = TRIG[r.trig] || [r.trig, '']; return '<span class="pill ' + t[1] + '">' + t[0] + '</span>'; }
+  function statusPill(r) {
+    var m = { done: 'ok', running: 'info', queued: '', error: 'bad', cancelled: '' }[r.status];
+    var tx = r.status === 'running' && r.started ? 'running ' + HW.fdur(Date.now() / 1000 - r.started) : r.status;
+    return '<span class="pill ' + m + '">' + esc(tx) + '</span>';
   }
-  function viewMtr() {
-    $('main').innerHTML = (admin() ? '<section class="card"><h2>Run MTR</h2><div class="row">' +
-      '<label class="f">Target<select id="mHost"></select></label>' +
-      '<label class="f">Mode<select id="mMode"><option value="icmp">ICMP</option><option value="tcp">TCP</option><option value="udp">UDP</option></select></label>' +
-      '<label class="f">TCP port<input type="number" id="mPort" min="1" max="65535"></label>' +
-      '<label class="f">Cycles<input type="number" id="mCycles" min="5" max="1000"></label>' +
-      '<button class="pri" id="mGo">Start</button></div><div class="muted small" id="mHint"></div></section>' : '') +
-      '<section class="card"><h2>Runs <span class="muted small">newest first · ▲ automatic runs start when loss stays over the limit set in Settings</span></h2><div class="scroll" id="mList"></div></section>';
-    if (admin()) {
-      Promise.all([api('/api/status'), api('/api/config')]).then(function (r) {
-        var st = r[0], cfg = r[1], locs = {};
-        st.targets.forEach(function (t) { if (t.enabled) (locs[t.location] = locs[t.location] || []).push(t); });
-        $('mHost').innerHTML = Object.keys(locs).map(function (l) {
-          return '<optgroup label="' + esc(l) + '"><option value="loc:' + esc(l) + '">all IPs of ' + esc(l) + '</option>' +
-            locs[l].map(function (t) { var tc = t.tcp && (t.tcp.state === 'open' || t.tcp.state === 'refused');
-              return '<option value="' + esc(t.host) + '">' + esc(t.host) + (tc ? '  (TCP ' + t.tcp.port + ' answers)' : '') + '</option>'; }).join('') + '</optgroup>';
-        }).join('');
-        $('mPort').value = cfg.tcp_check.port; $('mCycles').value = cfg.mtr.cycles;
-        $('mHint').textContent = 'A run takes about ' + fdur(cfg.mtr.cycles * cfg.mtr.interval_s + 5) + '. At most ' + cfg.mtr.max_parallel + ' run at once, the rest wait.';
-        $('mGo').onclick = function () {
-          var v = $('mHost').value, hosts = v.indexOf('loc:') === 0 ? locs[v.slice(4)].map(function (t) { return t.host; }) : [v];
-          api('/api/mtr', { method: 'POST', body: { hosts: hosts, mode: $('mMode').value, port: +$('mPort').value, cycles: +$('mCycles').value } })
-            .then(function (r) { toast(r.ids.length + ' run(s) started'); if (r.ids.length === 1) location.hash = '#/mtr/' + r.ids[0]; else refresh(); })
-            .catch(function (e) { toast(e.message, true); });
-        };
-      });
+  function modeName(r) { return r.mode === 'tcp' ? 'TCP ' + r.port : (r.mode || '').toUpperCase(); }
+  function lossCell(v) { if (v == null) return '<span class="faint">–</span>'; var c = v >= 20 ? 'var(--bad)' : v > 0 ? 'var(--warn)' : 'var(--ok)';
+    return '<div class="hopbar"><span class="num" style="width:44px;text-align:right;color:' + c + '">' + HW.fnum(v) + '%</span><div class="bar"><i style="width:' + Math.min(100, Math.max(v, v > 0 ? 3 : 0)) + '%;background:' + c + '"></i></div></div>'; }
+
+  function vMtr() {
+    var tab = qs('tab') || HW.ls('mtrTab') || 'runs';
+    head('MTR', 'Traces of the path to your targets, hop by hop', '<button class="btn-p" id="runBtn">' + I('play') + 'Run MTR</button>');
+    $('runBtn').onclick = function () { mtrDialog([]); };
+    $('main').innerHTML = '<div class="tabs" id="mtabs"></div><div id="mbody" class="col gap12"></div>';
+    var tabs = [['runs', 'Runs'], ['schedules', 'Schedules'], ['how', 'How it works']];
+    $('mtabs').innerHTML = tabs.map(function (t) { return '<button data-t="' + t[0] + '" class="' + (t[0] === tab ? 'on' : '') + '">' + t[1] + '</button>'; }).join('');
+    $('mtabs').onclick = function (e) { var b = e.target.closest('button'); if (!b) return; HW.ls('mtrTab', b.dataset.t); location.hash = '#/mtr?tab=' + b.dataset.t; };
+    ({ runs: mtrRuns, schedules: mtrSchedules, how: mtrHow })[tab]();
+  }
+  function mtrRuns() {
+    var f = HW.lsj('mrf', { range: 604800, hosts: [], trig: [], status: [], q: '' });
+    if (qs('host')) f.hosts = [qs('host')];
+    var sel = {}, last = [];
+    $('mbody').innerHTML = '<div class="card"><div class="bd row gap12"><span id="mrR"></span><div id="mrH"></div><div id="mrT"></div><div id="mrS"></div>' +
+      '<div class="search" style="width:200px">' + I('search') + '<input id="mrQ" placeholder="Search reason, IP…" value="' + esc(f.q) + '"></div></div></div>' +
+      '<div class="card"><div class="hd"><h2 id="mrN">Runs</h2><span class="sub" id="mrB"></span><span class="grow"></span><span id="mrSel" class="row"></span>' +
+      '<button class="btn-s" id="mrAll">' + I('download') + 'Export shown</button></div><div class="bd"><div class="tw" id="mrList"></div></div></div>';
+    var rp = HW.rangePicker($('mrR'), [[86400, '24h'], [604800, '7d'], [2592000, '30d'], [31536000, '1y']], f.custom ? { from: f.custom[0], to: f.custom[1] } : { range: f.range }, function (w) {
+      f.custom = w.range ? null : [w.from, w.to]; if (w.range) f.range = w.range; HW.ls('mrf', f); refresh(); });
+    status().then(function (st) {
+      HW.ms($('mrH'), { options: targetOpts(st), value: f.hosts, label: 'Targets', onChange: function (v) { f.hosts = v; HW.ls('mrf', f); refresh(); } });
+    });
+    HW.ms($('mrT'), { options: [{ value: 'manual', label: 'Manual' }, { value: 'auto', label: 'Automatic' }, { value: 'schedule', label: 'Scheduled' }], value: f.trig, label: 'Trigger', onChange: function (v) { f.trig = v; HW.ls('mrf', f); refresh(); } });
+    HW.ms($('mrS'), { options: ['done', 'running', 'queued', 'error', 'cancelled'].map(function (x) { return { value: x, label: x }; }), value: f.status, label: 'Status', onChange: function (v) { f.status = v; HW.ls('mrf', f); refresh(); } });
+    $('mrQ').oninput = function () { f.q = this.value; HW.ls('mrf', f); draw(); };
+    var idsOf = function (list) { return list.map(function (r) { return r.id; }).join(','); };
+    $('mrAll').onclick = function () { var l = filtered(); if (!l.length) return HW.toast('Nothing to export', true); exportMenu(this, l.map(function (r) { return r.id; })); };
+    function exportMenu(btn, ids) {
+      HW.menu(btn, [{ label: 'ZIP: every report as .txt + .json', icon: 'download', onClick: function () { HW.download('/api/mtr/export?format=zip&ids=' + ids.join(',')); } },
+        { label: 'One .txt with all reports', icon: 'download', onClick: function () { HW.download('/api/mtr/export?format=txt&ids=' + ids.join(',')); } },
+        { label: 'Copy all reports as text', icon: 'copy', onClick: function () { fetch('/api/mtr/export?format=txt&ids=' + ids.join(',')).then(function (r) { return r.text(); }).then(function (t) { HW.copy(t, ids.length + ' reports'); }); } }]);
     }
-    var refresh = function () {
-      api('/api/mtr?limit=300').then(function (r) {
-        $('mList').innerHTML = r.runs.length ? '<table class="tbl"><thead><tr><th>Started</th><th>Location</th><th>Target</th><th>Mode</th><th>Trigger</th><th>Status</th><th class="n">Loss at target</th><th class="n">Hops</th></tr></thead><tbody>' +
-          r.runs.map(function (x) {
-            return '<tr class="click" data-id="' + x.id + '"><td>' + fdt(x.started || x.created) + '</td><td>' + esc(x.location) + '</td><td>' + esc(x.host) + '</td><td>' + modeName(x) + '</td>' +
-              '<td>' + (x.trig === 'auto' ? '▲ auto <span class="muted small">' + esc(x.reason || '') + '</span>' : 'manual') + '</td><td>' + statusChip(x) + (x.error ? ' <span class="small bad">' + esc(x.error) + '</span>' : '') + '</td>' +
-              '<td class="n ' + (x.dst_loss > 0 ? 'bad' : '') + '">' + (x.dst_loss == null ? '' : fnum(x.dst_loss) + '%') + '</td><td class="n">' + (x.hops || '') + '</td></tr>';
-          }).join('') + '</tbody></table>' : '<p class="muted">No runs yet.</p>';
-        [].forEach.call($('mList').querySelectorAll('tr.click'), function (tr) { tr.onclick = function () { location.hash = '#/mtr/' + tr.dataset.id; }; });
+    function filtered() {
+      var q = f.q.toLowerCase();
+      return last.filter(function (r) { return !q || (r.host + ' ' + r.location + ' ' + (r.reason || '') + ' ' + (r.error || '')).toLowerCase().indexOf(q) >= 0; });
+    }
+    function drawSel() {
+      var ids = Object.keys(sel).map(Number);
+      $('mrSel').innerHTML = ids.length ? '<span class="pill info">' + ids.length + ' selected</span><button class="btn-s" id="mrX">' + I('download') + 'Export selected</button><button class="btn-s btn-g" id="mrC">Clear</button>' : '';
+      if (ids.length) { $('mrX').onclick = function () { exportMenu(this, ids); }; $('mrC').onclick = function () { sel = {}; draw(); }; }
+    }
+    function draw() {
+      var list = filtered();
+      $('mrN').textContent = list.length + ' runs';
+      $('mrList').innerHTML = list.length ? '<table class="table"><thead><tr><th class="w0"><input type="checkbox" id="mrAllSel"></th><th>Started</th><th>Location</th><th>Target</th><th>Mode</th><th>Trigger</th><th>Status</th><th style="min-width:150px">Loss at target</th><th class="r">Hops</th></tr></thead><tbody>' +
+        list.map(function (r) {
+          return '<tr class="click' + (sel[r.id] ? ' sel' : '') + '" data-id="' + r.id + '"><td class="w0"><input type="checkbox" data-s="' + r.id + '"' + (sel[r.id] ? ' checked' : '') + '></td>' +
+            '<td class="w0">' + HW.fdt(r.started || r.created) + '</td><td>' + esc(r.location) + '</td><td class="mono small">' + esc(r.host) + '</td><td>' + modeName(r) + '</td>' +
+            '<td>' + trigPill(r) + (r.reason ? ' <span class="xs muted">' + esc(r.reason) + '</span>' : '') + '</td><td>' + statusPill(r) + (r.error ? ' <span class="xs bad">' + esc(r.error.slice(0, 80)) + '</span>' : '') + '</td>' +
+            '<td>' + lossCell(r.dst_loss) + '</td><td class="r">' + (r.hops || '') + '</td></tr>';
+        }).join('') + '</tbody></table>' : '<div class="empty">No runs match. Start one with <b>Run MTR</b>, or set up a schedule.</div>';
+      var all = $('mrAllSel'); if (all) { all.checked = list.length && list.every(function (r) { return sel[r.id]; });
+        all.onclick = function (e) { e.stopPropagation(); list.forEach(function (r) { if (all.checked) sel[r.id] = 1; else delete sel[r.id]; }); draw(); }; }
+      [].forEach.call($('mrList').querySelectorAll('tr.click'), function (tr) {
+        tr.onclick = function (e) { var cb = e.target.closest('[data-s]');
+          if (cb) { if (cb.checked) sel[cb.dataset.s] = 1; else delete sel[cb.dataset.s]; draw(); return; }
+          location.hash = '#/mtr/' + tr.dataset.id; };
+      });
+      drawSel();
+    }
+    function refresh() {
+      var w = rp.get();
+      api('/api/mtr?limit=2000&from=' + Math.floor(w.from) + '&to=' + Math.ceil(w.to) + (f.hosts.length ? '&host=' + encodeURIComponent(f.hosts.join(',')) : '') +
+        (f.trig.length ? '&trig=' + f.trig.join(',') : '') + (f.status.length ? '&status=' + f.status.join(',') : '')).then(function (r) {
+        last = r.runs;
+        $('mrB').textContent = (r.running.length ? r.running.length + ' running' : 'none running') + (r.queued.length ? ' · ' + r.queued.length + ' waiting' : '');
+        draw();
       }).catch(fail);
-    };
-    every(refresh, 4000);
+    }
+    refresh(); S.timers.push(setInterval(refresh, 5000));
   }
-  function viewMtrRun(id) {
-    $('main').innerHTML = '<section class="card" id="run"><p class="muted">Loading…</p></section>';
-    var draw = function () {
+  function mtrSchedules() {
+    Promise.all([api('/api/config').catch(function () { return null; }), status(), api('/api/mtr?trig=schedule&limit=2000&from=' + Math.floor(Date.now() / 1000 - 30 * 86400))]).then(function (r) {
+      var cfg = S.cfg = r[0], st = r[1], runs = r[2].runs, lastBy = {};
+      runs.forEach(function (x) { if (x.schedule && !lastBy[x.schedule]) lastBy[x.schedule] = x; });
+      if (!cfg) { $('mbody').innerHTML = '<div class="card"><div class="empty">Log in to see and change schedules.</div></div>'; return; }
+      var sch = cfg.schedules;
+      var perHour = sch.filter(function (s) { return s.enabled; }).reduce(function (a, s) { return a + s.hosts.length * 60 / s.every_min; }, 0);
+      var busy = sch.filter(function (s) { return s.enabled; }).reduce(function (a, s) { return a + s.hosts.length * 60 / s.every_min * (s.cycles * cfg.mtr.interval_s + 5); }, 0) / cfg.mtr.max_parallel / 36;
+      $('mbody').innerHTML = '<div class="card"><div class="hd"><h2>Periodic MTR</h2><span class="sub">a record of the normal path, to compare with when something goes wrong</span><span class="grow"></span>' +
+        (admin() ? '<button class="btn-p btn-s" id="schAdd">' + I('plus') + 'New schedule</button>' : '') + '</div><div class="bd">' +
+        (busy > 0 ? '<div class="banner ' + (busy > 70 ? 'warn' : 'info') + '">' + I('info') + 'About ' + Math.round(perHour) + ' scheduled runs per hour, using ' + Math.round(busy) + '% of the MTR capacity (' + cfg.mtr.max_parallel + ' at once).' + (busy > 70 ? ' Runs to a target are skipped while the previous one still waits; use fewer targets, fewer cycles or longer intervals.' : '') + '</div><div class="mt12"></div>' : '') +
+        (sch.length ? '<div class="tw"><table class="table"><thead><tr><th>On</th><th>Name</th><th>Targets</th><th>Every</th><th>Mode</th><th class="r">Cycles</th><th>Last run</th><th></th></tr></thead><tbody>' +
+          sch.map(function (s, i) { var l = lastBy[s.id];
+            return '<tr><td class="w0"><label class="switch"><input type="checkbox" data-on="' + i + '"' + (s.enabled ? ' checked' : '') + (admin() ? '' : ' disabled') + '></label></td><td><b>' + esc(s.name) + '</b></td>' +
+              '<td>' + s.hosts.length + ' <span class="xs muted">' + esc(s.hosts.slice(0, 3).join(', ')) + (s.hosts.length > 3 ? '…' : '') + '</span></td><td>' + every_(s.every_min) + '</td><td>' + (s.mode === 'tcp_if_open' ? 'TCP where it answers' : s.mode.toUpperCase()) + '</td>' +
+              '<td class="r">' + s.cycles + '</td><td>' + (l ? '<a href="#/mtr?tab=runs">' + HW.fago(l.created) + '</a>' : '<span class="faint">not yet</span>') + '</td>' +
+              '<td class="w0">' + (admin() ? '<button class="btn-xs btn-g btn-i" data-ed="' + i + '">' + I('edit') + '</button><button class="btn-xs btn-g btn-i" data-del="' + i + '">' + I('trash') + '</button>' : '') + '</td></tr>'; }).join('') + '</tbody></table></div>'
+          : '<div class="empty">No schedules yet. A common start: all targets every hour, 100 cycles, so there is always a recent "normal" path on record.</div>') + '</div></div>';
+      var save = function () { return api('/api/config', { method: 'PUT', body: cfg }).then(function (c) { S.cfg = c; HW.toast('Schedules saved'); mtrSchedules(); }).catch(function (e) { HW.toast(e.message, true); }); };
+      if ($('schAdd')) $('schAdd').onclick = function () { schDialog(st, cfg, null, save); };
+      [].forEach.call($('mbody').querySelectorAll('[data-ed]'), function (b) { b.onclick = function () { schDialog(st, cfg, +b.dataset.ed, save); }; });
+      [].forEach.call($('mbody').querySelectorAll('[data-del]'), function (b) { b.onclick = function () { if (confirm('Delete schedule "' + cfg.schedules[+b.dataset.del].name + '"?')) { cfg.schedules.splice(+b.dataset.del, 1); save(); } }; });
+      [].forEach.call($('mbody').querySelectorAll('[data-on]'), function (b) { b.onchange = function () { cfg.schedules[+b.dataset.on].enabled = b.checked; save(); }; });
+    }).catch(fail);
+  }
+  function every_(m) { return m % 1440 === 0 ? (m / 1440 === 1 ? 'day' : m / 1440 + ' days') : m % 60 === 0 ? (m / 60 === 1 ? 'hour' : m / 60 + ' hours') : m + ' min'; }
+  function schDialog(st, cfg, i, save) {
+    var s = i == null ? { name: 'Baseline', enabled: true, hosts: [], every_min: 60, cycles: 100, mode: 'icmp' } : JSON.parse(JSON.stringify(cfg.schedules[i]));
+    HW.modal(i == null ? 'New schedule' : 'Edit schedule', '<div class="col gap12"><div class="field"><label>Name</label><input id="sN" value="' + esc(s.name) + '"></div>' +
+      '<div class="field"><label>Targets</label><div id="sT"></div></div>' +
+      '<div class="form"><div class="field"><label>Every</label><select id="sE">' + [15, 30, 60, 120, 180, 360, 720, 1440].map(function (m) { return '<option value="' + m + '"' + (m === s.every_min ? ' selected' : '') + '>' + every_(m) + '</option>'; }).join('') +
+      ([15, 30, 60, 120, 180, 360, 720, 1440].indexOf(s.every_min) < 0 ? '<option value="' + s.every_min + '" selected>' + every_(s.every_min) + '</option>' : '') + '</select></div>' +
+      '<div class="field"><label>Cycles</label><input type="number" id="sC" min="5" max="1000" value="' + s.cycles + '"></div></div>' +
+      '<div class="field"><label>Mode</label><span id="sM"></span></div>' + HW.sw('sOn', s.enabled, 'Enabled') + '</div>',
+      '<button class="btn-g" id="sX">Cancel</button><button class="btn-p" id="sOk">Save</button>');
+    var t = HW.ms($('sT'), { options: targetOpts(st, true), value: s.hosts, placeholder: 'Pick targets…' });
+    HW.seg($('sM'), [['icmp', 'ICMP'], ['tcp', 'TCP'], ['udp', 'UDP'], ['tcp_if_open', 'TCP where it answers']], s.mode, function (v) { s.mode = v; });
+    $('sX').onclick = HW.closeModal;
+    $('sOk').onclick = function () {
+      s.name = $('sN').value; s.hosts = t.get(); s.every_min = +$('sE').value; s.cycles = +$('sC').value; s.enabled = $('sOn').checked;
+      if (!s.hosts.length) return HW.toast('Pick at least one target', true);
+      if (i == null) cfg.schedules.push(s); else cfg.schedules[i] = s;
+      HW.closeModal(); save();
+    };
+  }
+  function mtrHow() {
+    $('mbody').innerHTML = '<div class="card"><div class="bd" style="max-width:900px">' +
+      '<h3 style="margin-top:0">What MTR shows</h3><p>MTR combines traceroute and ping. It sends packets with a rising TTL, so every router on the way answers once the TTL runs out. It repeats that for every cycle (100 by default) and reports, per hop: loss %, sent, last / average / best / worst latency and the standard deviation.</p>' +
+      '<h3>How to read it</h3><div class="steps">' +
+      '<div><span><b>Look at the last hop first.</b> No loss there means the path works, whatever the middle hops show.</span></div>' +
+      '<div><span><b>Loss that starts at one hop and continues to the end</b> is real. The problem is at that hop or the link before it. Hopwatch points this out above the hop table.</span></div>' +
+      '<div><span><b>Loss on a middle hop only</b> is usually that router limiting how often it answers ICMP. Its forwarding is fine.</span></div>' +
+      '<div><span><b>A jump in latency that stays</b> for all later hops shows where the delay comes from (often a long-distance link or a congested peering).</span></div>' +
+      '<div><span><b>ICMP vs TCP:</b> some networks treat ICMP differently. A TCP MTR to port 443 follows the path real traffic takes. Hopwatch checks daily which targets answer on the TCP port and offers TCP MTR there.</span></div></div>' +
+      '<h3>When Hopwatch runs MTR</h3><div class="steps">' +
+      '<div><span><b>Manual:</b> Run MTR here, or from a location or IP on the Overview.</span></div>' +
+      '<div><span><b>Automatic:</b> when a target goes down, when loss stays over the limit, or when latency rises (Settings → Automatic MTR). One more run when it recovers shows the path that works again.</span></div>' +
+      '<div><span><b>Scheduled:</b> periodic runs (the Schedules tab) keep a record of the normal path. Compare any run with the previous one to the same target to see if the path changed.</span></div></div>' +
+      '<h3>Giving it to support</h3><p>Open a run and use <b>Copy for support</b>: plain text in the layout of <code>mtr -rwbz</code>, with your site, public IP, target, mode and start time in UTC on top. For several runs, select them in the Runs tab and export a ZIP or one text file. For a whole incident, use <a href="#/evidence">Evidence</a>: one ZIP with a summary, every ping as CSV, the status changes and all MTR runs of the time window.</p>' +
+      '</div></div>';
+  }
+
+  /* run detail */
+  function vRun(id) {
+    head('MTR run #' + id, '', '');
+    $('main').innerHTML = '<div class="card"><div class="empty">Loading…</div></div>';
+    var cmp = false, prev = null;
+    function hopTable(hubs, other) {
+      var mx = Math.max.apply(null, hubs.map(function (h) { return h.Wrst || 0; }).concat([1]));
+      var oip = other ? other.map(function (h) { return HW.hopIp(h.host); }) : null;
+      return '<div class="tw"><table class="table"><thead><tr><th class="r">#</th><th>Host</th><th>AS</th><th style="min-width:130px">Loss</th><th class="r">Sent</th><th class="r">Last</th><th style="min-width:140px">Avg</th><th class="r">Best</th><th class="r">Worst</th><th class="r">StDev</th></tr></thead><tbody>' +
+        hubs.map(function (h, i) { var ch = oip && oip[i] !== HW.hopIp(h.host);
+          return '<tr' + (ch ? ' class="chg" title="Different from the other run"' : '') + '><td class="r">' + h.count + '</td><td class="mono small">' + esc(h.host) + '</td><td class="small muted">' + esc(h.ASN || '') + '</td>' +
+            '<td>' + lossCell(h['Loss%'] || 0) + '</td><td class="r">' + h.Snt + '</td><td class="r">' + HW.fnum(h.Last) + '</td>' +
+            '<td><div class="hopbar"><span class="num" style="width:44px;text-align:right">' + HW.fnum(h.Avg) + '</span><div class="bar"><i style="width:' + (h.Avg / mx * 100) + '%;background:var(--accent)"></i></div></div></td>' +
+            '<td class="r">' + HW.fnum(h.Best) + '</td><td class="r">' + HW.fnum(h.Wrst) + '</td><td class="r">' + HW.fnum(h.StDev) + '</td></tr>'; }).join('') + '</tbody></table></div>';
+    }
+    function draw() {
       api('/api/mtr/' + id).then(function (r) {
         var hubs = (r.result && r.result.report && r.result.report.hubs) || [];
-        var est = r.started ? Math.max(0, r.cycles - (Date.now() / 1000 - r.started)) : null;
-        $('run').innerHTML = '<h2><a href="#/mtr">MTR</a> › ' + esc(r.host) + ' <span class="muted small">' + esc(r.location) + '</span> ' + statusChip(r) + '</h2>' +
-          '<div class="row small muted">' + modeName(r) + ' · ' + r.cycles + ' cycles · ' + (r.trig === 'auto' ? '▲ automatic: ' + esc(r.reason || '') : 'manual') +
-          ' · started ' + fdt(r.started || r.created) + (r.finished && r.status === 'done' ? ' · took ' + fdur(r.finished - r.started) : '') +
-          (r.status === 'running' && est != null ? ' · about ' + fdur(est) + ' left' : '') + '</div>' +
-          (r.error ? '<div class="banner">' + esc(r.error) + '</div>' : '') +
-          '<div class="row">' + (r.report ? '<button class="pri" id="copy">Copy for support</button><a class="btn" href="/api/mtr/report/' + r.id + '">Download .txt</a>' : '') +
-          (admin() && (r.status === 'running' || r.status === 'queued') ? '<button class="danger" id="cancel">Cancel</button>' : '') +
-          (admin() && r.status !== 'running' && r.status !== 'queued' ? '<button id="again">Run again</button>' : '') + '</div>' +
-          (hubs.length ? '<div class="scroll"><table class="tbl"><thead><tr><th>#</th><th>Host</th><th>AS</th><th class="n">Loss</th><th class="n">Sent</th><th class="n">Last</th><th class="n">Avg</th><th class="n">Best</th><th class="n">Worst</th><th class="n">StDev</th></tr></thead><tbody>' +
-            hubs.map(function (h) { var l = h['Loss%'] || 0;
-              return '<tr><td>' + h.count + '</td><td>' + esc(h.host) + '</td><td class="muted">' + esc(h.ASN || '') + '</td>' +
-                '<td class="n ' + (l >= 50 ? 'bad' : l > 0 ? 'warn' : '') + '">' + fnum(l) + '%</td><td class="n">' + h.Snt + '</td><td class="n">' + fnum(h.Last) + '</td><td class="n">' + fnum(h.Avg) + '</td>' +
-                '<td class="n">' + fnum(h.Best) + '</td><td class="n">' + fnum(h.Wrst) + '</td><td class="n">' + fnum(h.StDev) + '</td></tr>'; }).join('') + '</tbody></table></div>' +
-            '<div class="muted small">Loss on a middle hop that does not continue to later hops is usually that router limiting its ICMP answers, not real loss.</div>' : '') +
-          (r.report ? '<h3>Text for support</h3><pre class="rep" id="rep"></pre>' : '');
+        var running = r.status === 'running' || r.status === 'queued';
+        head(r.host + ' · ' + r.location, 'MTR #' + r.id + ' · ' + modeName(r) + ' · ' + r.cycles + ' cycles · ' + HW.fdt(r.started || r.created),
+          '<a class="btn-s btn-g" href="#/mtr">' + I('route') + 'All runs</a>');
+        var v = HW.mtrVerdict(hubs), el = (r.started ? Date.now() / 1000 - r.started : 0), est = r.cycles * ((S.cfg && S.cfg.mtr.interval_s) || 1) + 5;
+        var hp = prev && prev.result ? (prev.result.report || {}).hubs || [] : null;
+        var same = hp && hp.length === hubs.length && hp.every(function (h, i) { return HW.hopIp(h.host) === HW.hopIp(hubs[i].host); });
+        $('main').innerHTML = '<div class="kpis">' +
+          kpi('info', 'Status', statusPill(r), r.error ? '<span class="bad">' + esc(r.error) + '</span>' : r.finished && r.status === 'done' ? 'took ' + HW.fdur(r.finished - r.started) : '') +
+          kpi('alert', 'Loss at target', r.dst_loss == null ? '–' : '<span class="' + (r.dst_loss >= 20 ? 'bad' : r.dst_loss > 0 ? 'warn' : 'ok') + '">' + HW.fnum(r.dst_loss) + '%</span>', hubs.length ? hubs.length + ' hops' : '') +
+          kpi('chart', 'Avg latency at target', hubs.length ? HW.fnum(hubs[hubs.length - 1].Avg) + '<span class="small muted"> ms</span>' : '–', hubs.length ? 'worst ' + HW.fnum(hubs[hubs.length - 1].Wrst) + ' ms' : '') +
+          kpi('clock', 'Trigger', trigPill(r), esc(r.reason || (r.trig === 'manual' ? 'started by hand' : ''))) + '</div>' +
+          (running ? '<div class="card"><div class="bd"><div class="row"><b>' + (r.status === 'queued' ? 'Waiting for a free slot…' : 'Tracing… about ' + HW.fdur(Math.max(0, est - el)) + ' left') + '</b><span class="grow"></span>' + (admin() ? '<button class="btn-s btn-d" id="cancel">' + I('stop') + 'Cancel</button>' : '') + '</div><div class="prog mt8"><i style="width:' + (r.status === 'queued' ? 2 : Math.min(98, el / est * 100)) + '%"></i></div></div></div>' : '') +
+          (v ? '<div class="banner ' + (v.level === 'ok' ? 'info' : v.level) + '">' + I(v.level === 'ok' ? 'check' : 'alert') + esc(v.text) + '</div>' : '') +
+          (hubs.length ? '<div class="card"><div class="hd"><h2>Hops</h2>' + (hp ? '<span class="pill ' + (same ? 'ok' : 'warn') + '">' + (same ? 'same path as the previous run' : 'path differs from the previous run') + '</span>' : '') + '<span class="grow"></span>' +
+            '<button class="btn-s btn-p" id="copy">' + I('copy') + 'Copy for support</button><button class="btn-s" id="dl">' + I('download') + 'Download</button>' +
+            (r.previous ? '<button class="btn-s" id="cmpB">' + I('layers') + (cmp ? 'Hide comparison' : 'Compare with previous') + '</button>' : '') +
+            (admin() ? '<button class="btn-s" id="again">' + I('refresh') + 'Run again</button>' : '') + '</div><div class="bd">' +
+            (cmp && prev ? '<div class="cmp"><div><div class="small muted" style="margin-bottom:6px">This run · ' + HW.fdt(r.started) + '</div>' + hopTable(hubs, hp) + '</div><div><div class="small muted" style="margin-bottom:6px"><a href="#/mtr/' + prev.id + '">Previous run #' + prev.id + '</a> · ' + HW.fdt(prev.started) + ' · ' + esc(TRIG[prev.trig][0]) + '</div>' + hopTable(hp, hubs) + '</div></div>' : hopTable(hubs)) +
+            '</div></div>' : '') +
+          (r.report ? '<div class="card"><div class="hd"><h2>Text for support</h2><span class="sub">the layout of mtr -rwbz, with who, what and when on top</span></div><div class="bd"><pre class="rep" id="rep"></pre></div></div>' : '');
         if (r.report) $('rep').textContent = r.report;
-        if ($('copy')) $('copy').onclick = function () { copyText(r.report); };
+        if ($('copy')) $('copy').onclick = function () { HW.copy(r.report, 'Report'); };
+        if ($('dl')) $('dl').onclick = function () { HW.menu(this, [
+          { label: 'Report as .txt', icon: 'download', onClick: function () { HW.download('/api/mtr/report/' + r.id); } },
+          { label: 'Raw result as .json', icon: 'download', onClick: function () { HW.download('/api/mtr/export?format=json&ids=' + r.id); } },
+          { label: 'ZIP with both', icon: 'download', onClick: function () { HW.download('/api/mtr/export?format=zip&ids=' + r.id + (r.previous && cmp ? ',' + r.previous : '')); } }]); };
         if ($('cancel')) $('cancel').onclick = function () { api('/api/mtr/cancel/' + r.id, { method: 'POST' }).then(draw); };
-        if ($('again')) $('again').onclick = function () {
-          api('/api/mtr', { method: 'POST', body: { hosts: [r.host], mode: r.mode, port: r.port, cycles: r.cycles } }).then(function (x) { location.hash = '#/mtr/' + x.ids[0]; });
-        };
-        if (r.status === 'running' || r.status === 'queued') { clearTimers(); S.timers.push(setTimeout(draw, 3000)); }
+        if ($('again')) $('again').onclick = function () { api('/api/mtr', { method: 'POST', body: { hosts: [r.host], mode: r.mode, port: r.port, cycles: r.cycles } }).then(function (x) { location.hash = '#/mtr/' + x.ids[0]; }).catch(function (e) { HW.toast(e.message, true); }); };
+        if ($('cmpB')) $('cmpB').onclick = function () { cmp = !cmp; if (cmp && !prev) api('/api/mtr/' + r.previous).then(function (p) { prev = p; draw(); }); else draw(); };
+        if (r.previous && !prev) api('/api/mtr/' + r.previous).then(function (p) { prev = p; draw(); });
+        if (running) { clearTimers(); S.timers.push(setTimeout(draw, 2500)); }
       }).catch(fail);
-    };
+    }
+    if (!S.cfg && admin()) api('/api/config').then(function (c) { S.cfg = c; });
     draw();
-  }
-  function copyText(t) {
-    var done = function () { toast('Copied'); };
-    if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(t).then(done, function () { fallback(); });
-    fallback();
-    function fallback() { var a = document.createElement('textarea'); a.value = t; document.body.appendChild(a); a.select();
-      try { document.execCommand('copy'); done(); } catch (e) { toast('Select the text below and copy it', true); } a.remove(); }
   }
 
   /* ------------------------------------------------------------ events */
-  function viewEvents() {
-    $('main').innerHTML = '<section class="card"><h2>Events <span class="muted small">status changes and automatic MTR runs, newest first</span></h2><div class="scroll" id="ev"></div></section>';
-    every(function () {
-      api('/api/events?limit=500').then(function (r) {
-        $('ev').innerHTML = r.events.length ? '<table class="tbl"><thead><tr><th>Time</th><th>Location</th><th>Target</th><th>What</th></tr></thead><tbody>' +
-          r.events.map(function (e) {
-            var what = e.kind === 'status' ? '<span class="dot ' + e.level + '"></span>' + esc(e.before) + ' → <b class="' + e.level + '">' + esc(e.level) + '</b>' +
-              (e.loss != null ? ' <span class="muted">loss ' + fnum(e.loss, 0) + '%' + (e.avg != null ? ', ' + fnum(e.avg) + ' ms' : '') + '</span>' : '')
-              : e.kind === 'auto_mtr' ? '▲ automatic MTR <a href="#/mtr/' + e.mtr_id + '">#' + e.mtr_id + '</a> <span class="muted">' + esc(e.reason || '') + '</span>' : esc(e.kind);
-            return '<tr><td>' + fdt(e.t) + '</td><td>' + esc(e.location || '') + '</td><td>' + esc(e.host || '') + '</td><td>' + what + '</td></tr>';
-          }).join('') + '</tbody></table>' : '<p class="muted">Nothing yet.</p>';
+  function vEvents() {
+    var f = HW.lsj('evf', { range: 604800, hosts: [], kinds: [], levels: [] });
+    head('Events', 'Status changes and automatic MTR runs');
+    $('main').innerHTML = '<div class="card"><div class="bd row gap12"><span id="evR"></span><div id="evH"></div><div id="evK"></div><div id="evL"></div></div></div><div class="card"><div class="bd"><div class="tw" id="ev"></div></div></div>';
+    var rp = HW.rangePicker($('evR'), [[86400, '24h'], [604800, '7d'], [2592000, '30d'], [31536000, '1y']], { range: f.range }, function (w) { if (w.range) f.range = w.range; HW.ls('evf', f); load(); });
+    status().then(function (st) { HW.ms($('evH'), { options: targetOpts(st), value: f.hosts, label: 'Targets', onChange: function (v) { f.hosts = v; HW.ls('evf', f); load(); } }); });
+    HW.ms($('evK'), { options: [{ value: 'status', label: 'Status changes' }, { value: 'auto_mtr', label: 'Automatic MTR' }], value: f.kinds, label: 'Kind', onChange: function (v) { f.kinds = v; HW.ls('evf', f); load(); } });
+    HW.ms($('evL'), { options: ['down', 'crit', 'warn', 'ok'].map(function (x) { return { value: x, label: STATUS[x] }; }), value: f.levels, label: 'Level', onChange: function (v) { f.levels = v; HW.ls('evf', f); draw(); } });
+    var last = [];
+    function draw() {
+      var l = last.filter(function (e) { return !f.levels.length || f.levels.indexOf(e.level) >= 0; });
+      $('ev').innerHTML = l.length ? '<table class="table"><thead><tr><th>Time</th><th>Location</th><th>Target</th><th>What</th><th></th></tr></thead><tbody>' + l.map(function (e) {
+        var what = e.kind === 'status' ? '<span class="pill ' + e.level + '">' + esc(STATUS[e.level] || e.level) + '</span> <span class="xs muted">was ' + esc(STATUS[e.before] || e.before) + (e.loss != null ? ' · loss ' + HW.fnum(e.loss, 0) + '%' : '') + (e.avg != null ? ' · ' + HW.fnum(e.avg) + ' ms' : '') + '</span>'
+          : e.kind === 'auto_mtr' ? '<span class="pill warn">Automatic MTR</span> <a href="#/mtr/' + e.mtr_id + '">#' + e.mtr_id + '</a> <span class="xs muted">' + esc(e.reason || '') + '</span>' : esc(e.kind);
+        return '<tr><td class="w0">' + HW.fdt(e.t) + '</td><td>' + esc(e.location || '') + '</td><td class="mono small">' + esc(e.host || '') + '</td><td>' + what + '</td>' +
+          '<td class="w0"><a class="btn-xs btn-g" href="#/evidence?at=' + Math.floor(e.t) + (e.host ? '&host=' + encodeURIComponent(e.host) : '') + '" title="Evidence for this moment">' + I('box') + '</a></td></tr>'; }).join('') + '</tbody></table>' : '<div class="empty">Nothing in this time range.</div>';
+    }
+    function load() { var w = rp.get();
+      api('/api/events?limit=5000&from=' + Math.floor(w.from) + '&to=' + Math.ceil(w.to) + (f.hosts.length ? '&host=' + encodeURIComponent(f.hosts.join(',')) : '') + (f.kinds.length ? '&kind=' + f.kinds.join(',') : ''))
+        .then(function (r) { last = r.events; draw(); }).catch(fail); }
+    load(); S.timers.push(setInterval(load, 15000));
+  }
+
+  /* ------------------------------------------------------------ evidence */
+  function vEvidence() {
+    head('Evidence', 'Everything about a time window in one file, ready for a support ticket');
+    var at = +qs('at'), host = qs('host');
+    var win = at ? { from: at - 1800, to: Math.min(Date.now() / 1000, at + 1800) } : { range: 86400 };
+    var sel = host ? [host] : [];
+    $('main').innerHTML = '<div class="card"><div class="hd"><h2>1 · Time window</h2><span class="sub">pick a preset, or a custom window around the incident</span></div><div class="bd col gap12"><span id="eR"></span><div id="eInc"></div></div></div>' +
+      '<div class="card"><div class="hd"><h2>2 · Targets</h2><span class="sub">empty = all targets</span></div><div class="bd"><div id="eT"></div></div></div>' +
+      '<div class="card"><div class="hd"><h2>3 · Note</h2><span class="sub">optional, goes into README.txt (ticket number, what you saw)</span></div><div class="bd"><textarea id="eN" style="min-height:70px" placeholder="e.g. Ticket 12345: users report timeouts to AMS since 09:10 UTC"></textarea></div></div>' +
+      '<div class="card"><div class="hd"><h2>4 · Download</h2></div><div class="bd col gap12"><div id="ePrev" class="small muted">…</div><div class="row">' +
+      '<button class="btn-p" id="eZip">' + I('box') + 'Evidence pack (.zip)</button><button id="eCsv">' + I('download') + 'Ping data (.csv)</button><button id="eMtr">' + I('route') + 'MTR runs only</button></div>' +
+      '<div class="xs muted">The ZIP holds README.txt (summary per target, status changes, MTR list), ping.csv (every ping for short windows, else 1- or 5-minute data), events.csv and every MTR report as .txt and .json. Times are UTC.</div></div></div>';
+    var rp = HW.rangePicker($('eR'), [[3600, '1h'], [21600, '6h'], [86400, '24h'], [604800, '7d'], [2592000, '30d']], win, function () { prev(); });
+    var ts = null;
+    status().then(function (st) {
+      ts = HW.ms($('eT'), { options: locOpts(st).map(function (l) { return { value: 'loc:' + l.value, label: 'All of ' + l.label, group: 'Locations' }; }).concat(targetOpts(st)), value: sel, label: 'Targets', placeholder: 'all', onChange: prev });
+      prev();
+    }).catch(fail);
+    api('/api/events?limit=50&kind=status&from=' + Math.floor(Date.now() / 1000 - 30 * 86400)).then(function (r) {
+      var inc = r.events.filter(function (e) { return e.level === 'down' || e.level === 'crit'; }).slice(0, 8);
+      $('eInc').innerHTML = inc.length ? '<div class="small muted" style="margin-bottom:6px">Recent problems – click to use ±30 minutes around one:</div><div class="row gap4">' + inc.map(function (e) {
+        return '<button class="btn-s" data-t="' + Math.floor(e.t) + '" data-h="' + esc(e.host || '') + '"><span class="dot ' + e.level + '"></span>' + HW.fdt(e.t, 1) + ' · ' + esc(e.location || e.host) + '</button>'; }).join('') + '</div>' : '';
+      [].forEach.call($('eInc').querySelectorAll('[data-t]'), function (b) { b.onclick = function () { var t = +b.dataset.t; rp.set({ from: t - 1800, to: Math.min(Date.now() / 1000, t + 1800) }); if (ts && b.dataset.h) ts.set([b.dataset.h]); prev(); }; });
+    });
+    function q() {
+      var w = rp.get(), v = ts ? ts.get() : sel, hosts = v.filter(function (x) { return x.indexOf('loc:') !== 0; }), locs = v.filter(function (x) { return x.indexOf('loc:') === 0; }).map(function (x) { return x.slice(4); });
+      return 'from=' + Math.floor(w.from) + '&to=' + Math.ceil(w.to) + (hosts.length ? '&host=' + encodeURIComponent(hosts.join(',')) : '') + (locs.length ? '&location=' + encodeURIComponent(locs.join(',')) : '');
+    }
+    function prev() {
+      var w = rp.get(), v = ts ? ts.get() : sel, hosts = v.filter(function (x) { return x.indexOf('loc:') !== 0; });
+      var locs = v.filter(function (x) { return x.indexOf('loc:') === 0; }).map(function (x) { return x.slice(4); });
+      if (locs.length && S.status) S.status.targets.forEach(function (t) { if (locs.indexOf(t.location) >= 0 && hosts.indexOf(t.host) < 0) hosts.push(t.host); });
+      var hq = hosts.length ? '&host=' + encodeURIComponent(hosts.join(',')) : '';
+      Promise.all([api('/api/mtr?limit=5000&from=' + Math.floor(w.from - 600) + '&to=' + Math.ceil(w.to + 600) + hq), api('/api/events?limit=10000&kind=status&from=' + Math.floor(w.from) + '&to=' + Math.ceil(w.to) + hq)]).then(function (r) {
+        $('ePrev').innerHTML = HW.fdt(w.from) + ' – ' + HW.fdt(w.to) + ' (' + HW.fdur(w.to - w.from) + ') · ' + (hosts.length || 'all') + ' targets · <b>' + r[0].runs.length + '</b> MTR runs · <b>' + r[1].events.length + '</b> status changes';
+        $('eMtr').onclick = function () { if (!r[0].runs.length) return HW.toast('No MTR runs in this window', true); HW.download('/api/mtr/export?format=zip&ids=' + r[0].runs.map(function (x) { return x.id; }).join(',')); };
       }).catch(fail);
-    }, 10000);
+    }
+    $('eZip').onclick = function () { HW.download('/api/evidence?' + q() + '&note=' + encodeURIComponent($('eN').value)); HW.toast('Preparing the ZIP…'); };
+    $('eCsv').onclick = function () { HW.download('/api/series.csv?' + q()); };
   }
 
   /* ------------------------------------------------------------ settings */
-  var FIELDS = [
-    ['General', [['site_name', 'Site name', 'text', 'Shown in the header and in MTR reports. Empty = container host name.']]],
-    ['Ping', [['ping.interval_ms', 'Interval (ms)', 'number', 'One ping per target every …'], ['ping.timeout_ms', 'Timeout (ms)', 'number', 'No reply within this time = lost'],
-      ['ping.size', 'Payload (bytes)', 'number', 'fping default is 56']]],
-    ['Status and alerts', [['alerts.window_s', 'Window (s)', 'number', 'Loss and latency are judged over this many seconds'],
-      ['alerts.loss_warn', 'Loss warning (%)', 'number', ''], ['alerts.loss_crit', 'Loss critical (%)', 'number', ''],
-      ['alerts.rtt_warn_ms', 'Latency warning (ms)', 'number', '0 = off'], ['alerts.rtt_crit_ms', 'Latency critical (ms)', 'number', '0 = off']]],
-    ['Automatic MTR', [['auto_mtr.enabled', 'Start MTR when loss is high', 'bool', ''], ['auto_mtr.loss_pct', 'Loss over (%)', 'number', ''],
-      ['auto_mtr.window_s', 'For (s)', 'number', 'Loss is measured over this window'], ['auto_mtr.cooldown_min', 'Cooldown (min)', 'number', 'No new automatic run for the same target during this time'],
-      ['auto_mtr.per_location', 'One run per location', 'bool', 'Cooldown per location instead of per IP'], ['auto_mtr.max_per_hour', 'At most per hour', 'number', 'For all targets together'],
-      ['auto_mtr.mode', 'Mode', ['icmp:ICMP', 'tcp:TCP', 'tcp_if_open:TCP where the port answers, else ICMP'], '']]],
-    ['MTR', [['mtr.cycles', 'Cycles', 'number', 'Pings per hop; support usually asks for 100'], ['mtr.interval_s', 'Interval (s)', 'number', ''],
-      ['mtr.resolve', 'Show host names', 'bool', 'Reverse DNS for every hop'], ['mtr.asn', 'Show AS numbers', 'bool', ''],
-      ['mtr.max_parallel', 'Runs at once', 'number', ''], ['mtr.public_ip_url', 'Public IP lookup URL', 'text', 'Put into reports. Empty = off']]],
-    ['TCP port check', [['tcp_check.enabled', 'Check which targets answer on a TCP port', 'bool', 'Decides where TCP MTR is offered'],
-      ['tcp_check.port', 'Port', 'number', ''], ['tcp_check.every_h', 'Every (hours)', 'number', '']]],
-    ['Retention', [['retention.raw_days', 'Every ping (days)', 'number', ''], ['retention.m1_days', '1-minute data (days)', 'number', ''],
-      ['retention.m5_days', '5-minute data (days)', 'number', ''], ['retention.mtr_days', 'MTR runs (days)', 'number', ''], ['retention.mtr_max', 'MTR runs (max count)', 'number', '']]],
-  ];
-  function getP(o, p) { return p.split('.').reduce(function (a, k) { return a == null ? a : a[k]; }, o); }
-  function setP(o, p, v) { var ks = p.split('.'), last = ks.pop(); ks.reduce(function (a, k) { return a[k] = a[k] || {}; }, o)[last] = v; }
-  function viewSettings() {
-    if (!admin()) { $('main').innerHTML = '<section class="card"><p>Log in to change the settings.</p><button class="pri" id="li">Log in</button></section>'; $('li').onclick = function () { loginBox(false); }; return; }
-    api('/api/config').then(function (cfg) {
-      S.cfg = cfg;
-      var html = '<section class="card"><h2>Targets <span class="muted small">' + cfg.targets.length + ' · location name groups the IPs</span></h2>' +
-        '<div class="scroll tlist"><table class="tbl" id="tt"><thead><tr><th>On</th><th>Location</th><th>IP or host name</th><th></th></tr></thead><tbody></tbody></table></div>' +
-        '<div class="row"><button id="tAdd">+ Add target</button><button id="tBulk">Paste a list…</button><button id="tNd">Import from Netdata…</button></div></section>';
-      FIELDS.forEach(function (sec) {
-        html += '<section class="card"><h2>' + sec[0] + '</h2><div class="form">' + sec[1].map(function (f) {
-          var v = getP(cfg, f[0]), id = 'f_' + f[0].replace('.', '_');
-          if (f[2] === 'bool') return '<label class="c"><input type="checkbox" id="' + id + '"' + (v ? ' checked' : '') + '> ' + esc(f[1]) + (f[3] ? ' <span class="muted small">' + esc(f[3]) + '</span>' : '') + '</label>';
-          if (Array.isArray(f[2])) return '<label class="f">' + esc(f[1]) + '<select id="' + id + '">' + f[2].map(function (o) { var p = o.split(':'); return '<option value="' + p[0] + '"' + (p[0] === v ? ' selected' : '') + '>' + esc(p[1]) + '</option>'; }).join('') + '</select></label>';
-          return '<label class="f">' + esc(f[1]) + '<input type="' + f[2] + '" id="' + id + '" value="' + esc(v) + '"' + (f[2] === 'number' ? ' step="any"' : '') + '>' + (f[3] ? '<span class="h">' + esc(f[3]) + '</span>' : '') + '</label>';
-        }).join('') + '</div>' + (sec[0] === 'TCP port check' ? '<div class="row"><button id="tcpNow" class="small">Check now</button></div>' : '') + '</section>';
-      });
-      html += '<section class="card"><h2>Security</h2><div class="form">' +
-        '<label class="c"><input type="checkbox" id="f_security_view_requires_login"' + (cfg.security.view_requires_login ? ' checked' : '') + '> Viewing needs a login too</label>' +
-        '<label class="f">Allowed origins (CORS)<input id="f_security_cors_origins" value="' + esc(cfg.security.cors_origins) + '"><span class="h">Other pages that may read this probe, comma separated. * = any, empty = none</span></label></div>' +
-        '<h3>Change password</h3><div class="form"><label class="f">Current<input type="password" id="pOld" autocomplete="current-password"></label>' +
-        '<label class="f">New<input type="password" id="pNew" autocomplete="new-password"></label><div class="row"><button id="pGo">Change</button></div></div>' +
-        '<h3>API tokens</h3><div class="muted small">For Hopwatch Hub or scripts: send as <code>Authorization: Bearer …</code>. A token can do everything an admin can.</div><div id="toks"></div>' +
-        '<div class="row"><input id="tokName" placeholder="name, e.g. hub"><button id="tokNew">Create token</button></div></section>' +
-        '<section class="card"><h2>History from Netdata</h2><div class="muted small">Copies the per-minute and 5-minute history of the targets above from a Netdata agent with the go.d ping collector. Existing data is kept.</div>' +
-        '<div class="row"><input id="hUrl" placeholder="http://netdata-host:19999" size="32"><label class="c small">days <input type="number" id="hDays" value="365"></label><button id="hGo">Import history</button></div><div id="hSt" class="small muted"></div>' +
-        '<h3>Storage</h3><div id="stor" class="small muted"></div></section>' +
-        '<div class="row" style="position:sticky;bottom:0;background:var(--bg);padding:8px 0"><span class="grow"></span><span id="dirty" class="muted small"></span><button class="pri" id="save">Save settings</button></div>';
-      $('main').innerHTML = html;
-      var T = cfg.targets.map(function (t) { return Object.assign({}, t); });
-      var drawT = function () {
-        $('tt').tBodies[0].innerHTML = T.map(function (t, i) {
-          return '<tr><td><input type="checkbox" data-i="' + i + '" data-k="enabled"' + (t.enabled ? ' checked' : '') + '></td>' +
-            '<td><input data-i="' + i + '" data-k="location" value="' + esc(t.location) + '"></td>' +
-            '<td><input data-i="' + i + '" data-k="host" value="' + esc(t.host) + '"></td>' +
-            '<td><button class="small danger" data-del="' + i + '">✕</button></td></tr>';
-        }).join('') || '<tr><td colspan="4" class="muted">No targets.</td></tr>';
-        [].forEach.call($('tt').querySelectorAll('input'), function (inp) {
-          inp.oninput = function () { T[+inp.dataset.i][inp.dataset.k] = inp.type === 'checkbox' ? inp.checked : inp.value.trim(); dirty(); };
-        });
-        [].forEach.call($('tt').querySelectorAll('[data-del]'), function (b) { b.onclick = function () { T.splice(+b.dataset.del, 1); drawT(); dirty(); }; });
-      };
-      drawT();
+  function vSettings() {
+    if (!admin()) { head('Settings', ''); $('main').innerHTML = '<div class="card"><div class="empty">Log in to change the settings.<div class="mt12"><button class="btn-p" id="li">' + I('lock') + 'Log in</button></div></div></div>'; $('li').onclick = function () { loginBox(false); }; return; }
+    var tab = qs('tab') || HW.ls('setTab') || 'targets';
+    head('Settings', 'Everything is set here; changes apply as soon as you save', '<span class="xs muted" id="dirty"></span><button class="btn-p" id="save">' + I('check') + 'Save</button>');
+    Promise.all([api('/api/config'), status()]).then(function (r) {
+      var cfg = S.cfg = r[0], D = JSON.parse(JSON.stringify(cfg));
+      var tabs = [['targets', 'Targets'], ['monitor', 'Ping & alerts'], ['auto', 'Automatic MTR'], ['mtr', 'MTR & TCP'], ['retention', 'Retention'], ['security', 'Security'], ['import', 'Import']];
+      $('main').innerHTML = '<div class="tabs" id="stabs">' + tabs.map(function (t) { return '<button data-t="' + t[0] + '" class="' + (t[0] === tab ? 'on' : '') + '">' + t[1] + '</button>'; }).join('') + '</div><div id="sbody" class="col gap12"></div>';
       var dirty = function () { $('dirty').textContent = 'unsaved changes'; };
-      [].forEach.call(document.querySelectorAll('[id^=f_]'), function (e) { e.addEventListener('input', dirty); e.addEventListener('change', dirty); });
-      $('tAdd').onclick = function () { var last = T[T.length - 1]; T.push({ location: last ? last.location : '', host: '', enabled: true }); drawT(); dirty(); };
-      $('tBulk').onclick = function () {
-        modal('<h2>Paste targets</h2><div class="muted small">One per line: <code>Location, IP</code> or just <code>IP</code>. They are added to the list.</div><textarea id="bulk"></textarea>' +
-          '<div class="row"><span class="grow"></span><button id="bc">Cancel</button><button class="pri" id="bo">Add</button></div>');
-        $('bc').onclick = closeModal;
-        $('bo').onclick = function () {
-          $('bulk').value.split(/\n/).forEach(function (l) { l = l.trim(); if (!l) return; var p = l.split(/[,;\t]/).map(function (x) { return x.trim(); });
-            var host = p.length > 1 ? p[1] : p[0], loc = p.length > 1 ? p[0] : p[0];
-            if (!T.some(function (t) { return t.host === host; })) T.push({ location: loc, host: host, enabled: true }); });
-          closeModal(); drawT(); dirty();
-        };
-      };
-      $('tNd').onclick = function () {
-        modal('<h2>Import targets from Netdata</h2><label class="f">Netdata address<input id="ndu" placeholder="http://netdata-host:19999"></label><div id="ndr" class="small muted"></div>' +
-          '<div class="row"><span class="grow"></span><button id="ndc">Cancel</button><button id="ndl">Read</button><button class="pri hidden" id="ndo">Add these</button></div>');
-        var found = [];
-        $('ndc').onclick = closeModal;
-        $('ndl').onclick = function () {
-          $('ndr').textContent = 'Reading…';
-          api('/api/import/targets', { method: 'POST', body: { url: $('ndu').value } }).then(function (r) {
-            found = r.targets; var locs = {}; found.forEach(function (t) { locs[t.location] = 1; });
-            $('ndr').textContent = 'Found ' + found.length + ' IPs in ' + Object.keys(locs).length + ' locations. Targets you already have are skipped.';
-            $('ndo').className = found.length ? 'pri' : 'pri hidden';
-          }).catch(function (e) { $('ndr').textContent = e.message; });
-        };
-        $('ndo').onclick = function () {
-          found.forEach(function (f) { if (!T.some(function (t) { return t.host === f.host; })) T.push({ location: f.location, host: f.host, enabled: true }); });
-          $('hUrl').value = $('ndu').value; closeModal(); drawT(); dirty();
-        };
-      };
-      $('tcpNow').onclick = function () { api('/api/tcpcheck', { method: 'POST' }).then(function () { toast('Checking, results show on the Overview in a minute'); }); };
+      $('stabs').onclick = function (e) { var b = e.target.closest('button'); if (!b) return; tab = b.dataset.t; HW.ls('setTab', tab);
+        [].forEach.call($('stabs').children, function (x) { x.className = x === b ? 'on' : ''; }); show(); };
       $('save').onclick = function () {
-        var c = JSON.parse(JSON.stringify(cfg)); c.targets = T.filter(function (t) { return t.host; });
-        FIELDS.forEach(function (sec) { sec[1].forEach(function (f) { var e = $('f_' + f[0].replace('.', '_'));
-          setP(c, f[0], f[2] === 'bool' ? e.checked : f[2] === 'number' ? +e.value : e.value); }); });
-        c.security = { view_requires_login: $('f_security_view_requires_login').checked, cors_origins: $('f_security_cors_origins').value };
-        api('/api/config', { method: 'PUT', body: c }).then(function () { toast('Saved'); loadInfo(); viewSettings(); }).catch(function (e) { toast(e.message, true); });
+        api('/api/config', { method: 'PUT', body: D }).then(function (c) { S.cfg = c; cfg = c; D = JSON.parse(JSON.stringify(c)); $('dirty').textContent = ''; HW.toast('Saved'); loadInfo(); show(); })
+          .catch(function (e) { HW.toast(e.message, true); });
       };
-      $('pGo').onclick = function () {
-        api('/api/password', { method: 'POST', body: { old: $('pOld').value, new: $('pNew').value } }).then(function () { toast('Password changed'); $('pOld').value = $('pNew').value = ''; })
-          .catch(function (e) { toast(e.message, true); });
+      var get = function (p) { return p.split('.').reduce(function (a, k) { return a == null ? a : a[k]; }, D); };
+      var set = function (p, v) { var ks = p.split('.'), l = ks.pop(); ks.reduce(function (a, k) { return a[k]; }, D)[l] = v; dirty(); };
+      var fld = function (p, label, hint, type, extra) {
+        var v = get(p);
+        if (type === 'bool') return '<div class="field">' + HW.sw('f-' + p, v, label, hint).replace('<input', '<input data-p="' + p + '"') + '</div>';
+        return '<div class="field"><label>' + esc(label) + '</label><input data-p="' + p + '" data-n="' + (type === 'text' ? '' : 1) + '" type="' + (type || 'number') + '" value="' + esc(v) + '"' + (extra || '') + '>' + (hint ? '<span class="hint">' + esc(hint) + '</span>' : '') + '</div>';
       };
-      var drawTok = function (list) {
-        $('toks').innerHTML = list.length ? '<table class="tbl"><tbody>' + list.map(function (t) { return '<tr><td>' + esc(t.name) + '</td><td class="muted">created ' + fdt(t.created) + '</td><td><button class="small danger" data-tok="' + t.id + '">Delete</button></td></tr>'; }).join('') + '</tbody></table>' : '<p class="muted small">none</p>';
-        [].forEach.call($('toks').querySelectorAll('[data-tok]'), function (b) { b.onclick = function () { if (confirm('Delete this token?')) api('/api/tokens/' + b.dataset.tok, { method: 'DELETE' }).then(function () { api('/api/config').then(function (c) { drawTok(c.security.tokens); }); }); }; });
-      };
-      drawTok(cfg.security.tokens);
-      $('tokNew').onclick = function () {
-        api('/api/tokens', { method: 'POST', body: { name: $('tokName').value || 'token' } }).then(function (r) {
-          modal('<h2>New token</h2><div class="muted small">Copy it now, it is not shown again.</div><pre class="rep">' + esc(r.token) + '</pre><div class="row"><span class="grow"></span><button id="tc">Copy</button><button class="pri" id="tk">Done</button></div>');
-          $('tc').onclick = function () { copyText(r.token); }; $('tk').onclick = closeModal;
-          api('/api/config').then(function (c) { drawTok(c.security.tokens); });
-        }).catch(function (e) { toast(e.message, true); });
-      };
-      var hPoll = function () {
-        api('/api/import/history').then(function (j) {
-          $('hSt').textContent = j.state === 'idle' ? '' : j.state === 'running' ? 'Importing… ' + j.done + ' of ' + (j.total || '?') + ' targets, ' + j.records + ' records' :
-            j.state === 'done' ? 'Done: ' + j.records + ' records for ' + j.total + ' targets.' : 'Failed: ' + (j.error || '');
-          if (j.state === 'running') setTimeout(hPoll, 2000);
+      var bind = function () {
+        [].forEach.call($('sbody').querySelectorAll('[data-p]'), function (e) {
+          e.addEventListener(e.type === 'checkbox' ? 'change' : 'input', function () { set(e.dataset.p, e.type === 'checkbox' ? e.checked : e.dataset.n ? +e.value : e.value); });
         });
       };
-      $('hGo').onclick = function () { api('/api/import/history', { method: 'POST', body: { url: $('hUrl').value, days: +$('hDays').value } }).then(hPoll).catch(function (e) { toast(e.message, true); }); };
-      hPoll();
-      api('/api/storage').then(function (s) { $('stor').textContent = 'Database ' + (s.bytes / 1048576).toFixed(1) + ' MB · ' + s.raw + ' minute rows · ' + s.mtr + ' MTR runs'; });
+      var card = function (title, sub, body) { return '<div class="card"><div class="hd"><h2>' + title + '</h2>' + (sub ? '<span class="sub">' + sub + '</span>' : '') + '</div><div class="bd">' + body + '</div></div>'; };
+      function show() {
+        var B = $('sbody');
+        if (tab === 'targets') return targets();
+        if (tab === 'monitor') B.innerHTML = card('General', '', '<div class="form">' + fld('site_name', 'Site name', 'Shown in the header and in every report. Empty = container host name.', 'text') + '</div>') +
+          card('Ping', 'one ping per target per interval', '<div class="form">' + fld('ping.interval_ms', 'Interval (ms)', '1000 = every second') + fld('ping.timeout_ms', 'Timeout (ms)', 'No reply within this time counts as lost') + fld('ping.size', 'Payload (bytes)', 'fping default is 56') + '</div>') +
+          card('Status and alerts', 'how the Overview colours targets', '<div class="form">' + fld('alerts.window_s', 'Window (s)', 'Loss and latency are judged over this many seconds') + fld('alerts.loss_warn', 'Loss warning (%)') + fld('alerts.loss_crit', 'Loss critical (%)') +
+            fld('alerts.rtt_warn_ms', 'Latency warning (ms)', '0 = off') + fld('alerts.rtt_crit_ms', 'Latency critical (ms)', '0 = off') + '</div>');
+        if (tab === 'auto') B.innerHTML = card('Automatic MTR', 'evidence is recorded the moment something goes wrong', '<div class="col gap12">' + fld('auto_mtr.enabled', 'Run MTR automatically', 'Master switch for everything on this page', 'bool') + '</div>') +
+          card('When', '', '<div class="col gap12">' + fld('auto_mtr.on_down', 'When a target goes down', 'Every ping lost over the alert window', 'bool') +
+            '<div class="form">' + fld('auto_mtr.loss_pct', 'When loss is over (%)', 'Measured over the window below') + fld('auto_mtr.window_s', 'Window (s)', '') + '</div>' +
+            fld('auto_mtr.on_latency', 'When latency is high', 'Uses the limits below', 'bool') +
+            '<div class="form">' + fld('auto_mtr.latency_ms', 'Latency over (ms)', '0 = off') + fld('auto_mtr.latency_rise_ms', 'Or this much over normal (ms)', 'Normal = median of the last 24 h. 0 = off') + '</div>' +
+            fld('auto_mtr.on_recovery', 'Once more when it recovers', 'Shows the working path next to the broken one', 'bool') + '</div>') +
+          card('Limits', 'so an outage does not flood the queue', '<div class="form">' + fld('auto_mtr.cooldown_min', 'Cooldown (min)', 'No new automatic run for the same target or location') +
+            fld('auto_mtr.max_per_hour', 'At most per hour', 'All targets together') + '<div class="field"><label>Mode</label><select data-p="auto_mtr.mode">' + [['icmp', 'ICMP'], ['tcp', 'TCP'], ['tcp_if_open', 'TCP where the port answers, else ICMP']].map(function (o) { return '<option value="' + o[0] + '"' + (get('auto_mtr.mode') === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></div></div>' +
+            '<div class="mt12">' + fld('auto_mtr.per_location', 'One run per location', 'The cooldown counts per location instead of per IP', 'bool') + '</div>');
+        if (tab === 'mtr') B.innerHTML = card('MTR', 'defaults for every run', '<div class="form">' + fld('mtr.cycles', 'Cycles', 'Pings per hop; support usually asks for 100') + fld('mtr.interval_s', 'Interval (s)', 'Between cycles') +
+            fld('mtr.max_parallel', 'Runs at once', 'The rest wait in the queue') + fld('mtr.public_ip_url', 'Public IP lookup URL', 'Put into reports. Empty = off', 'text') + '</div><div class="col gap12 mt12">' +
+            fld('mtr.resolve', 'Show host names', 'Reverse DNS for every hop', 'bool') + fld('mtr.asn', 'Show AS numbers', 'Which network each hop belongs to', 'bool') + '</div>') +
+          card('TCP port check', 'decides where TCP MTR is offered', '<div class="col gap12">' + fld('tcp_check.enabled', 'Check which targets answer on a TCP port', '', 'bool') + '<div class="form">' + fld('tcp_check.port', 'Port') + fld('tcp_check.every_h', 'Every (hours)') + '</div><div><button class="btn-s" id="tcpNow">' + I('refresh') + 'Check now</button></div></div>');
+        if (tab === 'retention') { B.innerHTML = card('Retention', 'older data is rolled up and removed automatically', '<div class="form">' + fld('retention.raw_days', 'Every ping (days)') + fld('retention.m1_days', '1-minute data (days)') + fld('retention.m5_days', '5-minute data (days)') +
+            fld('retention.mtr_days', 'MTR runs (days)') + fld('retention.mtr_max', 'MTR runs (max count)') + '</div><div class="small muted mt12" id="stor"></div>');
+          api('/api/storage').then(function (s) { $('stor').textContent = 'Database now ' + (s.bytes / 1048576).toFixed(1) + ' MB · ' + s.mtr + ' MTR runs'; }); }
+        if (tab === 'security') {
+          B.innerHTML = card('Access', '', '<div class="col gap12">' + fld('security.view_requires_login', 'Viewing needs a login too', 'Off: anyone on the network can look, only admins change things', 'bool') +
+            '<div class="form">' + fld('security.cors_origins', 'Allowed origins (CORS)', 'Pages that may read this probe from a browser. * = any, empty = none', 'text') + '</div></div>') +
+            card('Change password', '', '<div class="form"><div class="field"><label>Current</label><input type="password" id="pO" autocomplete="current-password"></div><div class="field"><label>New</label><input type="password" id="pN" autocomplete="new-password"></div></div><div class="mt12"><button id="pGo">Change password</button></div>') +
+            card('API tokens', 'for Hopwatch Hub or scripts: <code>Authorization: Bearer …</code> · a token can do everything an admin can', '<div id="toks"></div><div class="row mt12"><input id="tkN" placeholder="Name, e.g. hub"><button id="tkGo">' + I('plus') + 'Create token</button></div>');
+          $('pGo').onclick = function () { api('/api/password', { method: 'POST', body: { old: $('pO').value, new: $('pN').value } }).then(function () { HW.toast('Password changed'); $('pO').value = $('pN').value = ''; }).catch(function (e) { HW.toast(e.message, true); }); };
+          var toks = function (l) {
+            $('toks').innerHTML = l.length ? '<div class="tw"><table class="table"><tbody>' + l.map(function (t) { return '<tr><td><b>' + esc(t.name) + '</b></td><td class="muted">created ' + HW.fdt(t.created, 1) + '</td><td class="w0"><button class="btn-xs btn-d" data-tk="' + t.id + '">' + I('trash') + 'Delete</button></td></tr>'; }).join('') + '</tbody></table></div>' : '<div class="small muted">No tokens.</div>';
+            [].forEach.call($('toks').querySelectorAll('[data-tk]'), function (b) { b.onclick = function () { if (confirm('Delete this token? Whatever uses it stops working.')) api('/api/tokens/' + b.dataset.tk, { method: 'DELETE' }).then(function () { api('/api/config').then(function (c) { toks(c.security.tokens); }); }); }; });
+          };
+          toks(cfg.security.tokens);
+          $('tkGo').onclick = function () { api('/api/tokens', { method: 'POST', body: { name: $('tkN').value || 'token' } }).then(function (r) {
+            HW.modal('New token', '<p class="muted">Copy it now, it is not shown again.</p><pre class="rep">' + esc(r.token) + '</pre>', '<button id="tc">' + I('copy') + 'Copy</button><button class="btn-p" id="tk">Done</button>');
+            $('tc').onclick = function () { HW.copy(r.token, 'Token'); }; $('tk').onclick = HW.closeModal; api('/api/config').then(function (c) { toks(c.security.tokens); }); }).catch(function (e) { HW.toast(e.message, true); }); };
+        }
+        if (tab === 'import') {
+          B.innerHTML = card('Targets from Netdata', 'reads the go.d ping jobs: job name = location', '<div class="row"><input id="ndU" placeholder="http://netdata-host:19999" style="width:280px" value="' + esc(HW.ls('ndUrl') || '') + '"><button id="ndR">Read</button></div><div id="ndO" class="small muted mt12"></div>') +
+            card('History from Netdata', 'copies 1- and 5-minute history of your targets; existing data is kept', '<div class="row"><label class="small muted">Days</label><input type="number" id="hD" value="30"><button id="hGo">' + I('download') + 'Import history</button></div><div id="hS" class="small muted mt12"></div>');
+          $('ndR').onclick = function () { HW.ls('ndUrl', $('ndU').value); $('ndO').textContent = 'Reading…';
+            api('/api/import/targets', { method: 'POST', body: { url: $('ndU').value } }).then(function (x) {
+              var have = {}; D.targets.forEach(function (t) { have[t.host] = 1; }); var nw = x.targets.filter(function (t) { return !have[t.host]; });
+              $('ndO').innerHTML = 'Found ' + x.targets.length + ' IPs, ' + nw.length + ' new. ' + (nw.length ? '<button class="btn-s btn-p" id="ndA">Add ' + nw.length + ' to the list</button>' : '');
+              if ($('ndA')) $('ndA').onclick = function () { nw.forEach(function (t) { D.targets.push({ location: t.location, host: t.host, enabled: true }); }); dirty(); HW.toast(nw.length + ' targets added – Save to apply'); $('ndO').textContent = 'Added. Press Save.'; };
+            }).catch(function (e) { $('ndO').textContent = e.message; }); };
+          var poll = function () { api('/api/import/history').then(function (j) {
+            $('hS').textContent = j.state === 'idle' ? '' : j.state === 'running' ? 'Importing… ' + j.done + ' of ' + (j.total || '?') + ' targets, ' + j.records + ' records' : j.state === 'done' ? 'Done: ' + j.records + ' records for ' + j.total + ' targets.' : 'Failed: ' + (j.error || '');
+            if (j.state === 'running') S.timers.push(setTimeout(poll, 2000)); }); };
+          $('hGo').onclick = function () { HW.ls('ndUrl', $('ndU').value); api('/api/import/history', { method: 'POST', body: { url: $('ndU').value, days: +$('hD').value } }).then(poll).catch(function (e) { HW.toast(e.message, true); }); };
+          poll();
+        }
+        bind();
+        if ($('tcpNow')) $('tcpNow').onclick = function () { api('/api/tcpcheck', { method: 'POST' }).then(function () { HW.toast('Checking – the Overview shows the result in a minute'); }); };
+      }
+      function targets() {
+        var tf = { q: '', locs: [] }, picked = {};
+        $('sbody').innerHTML = '<div class="card"><div class="hd"><h2>Targets</h2><span class="sub" id="tCount"></span><span class="grow"></span>' +
+          '<button class="btn-s" id="tAdd">' + I('plus') + 'Add</button><button class="btn-s" id="tPaste">Paste a list…</button></div><div class="bd col gap12">' +
+          '<div class="row"><div class="search" style="width:240px">' + I('search') + '<input id="tQ" placeholder="Filter"></div><div id="tL"></div><span class="grow"></span><span id="tBulk" class="row"></span></div>' +
+          '<div class="tw" style="max-height:60vh"><table class="table"><thead><tr><th class="w0"><input type="checkbox" id="tAll"></th><th class="w0">On</th><th>Location</th><th>IP or host name</th><th class="w0"></th></tr></thead><tbody id="tB"></tbody></table></div>' +
+          '<div class="xs muted">IPs with the same location are grouped on the Overview. Press Save (top right) to apply.</div></div></div>';
+        var lm = HW.ms($('tL'), { options: [], label: 'Location', onChange: function (v) { tf.locs = v; draw(); } });
+        $('tQ').oninput = function () { tf.q = this.value.toLowerCase(); draw(); };
+        function vis() { return D.targets.map(function (t, i) { return [t, i]; }).filter(function (x) { var t = x[0];
+          return (!tf.locs.length || tf.locs.indexOf(t.location) >= 0) && (!tf.q || (t.location + ' ' + t.host).toLowerCase().indexOf(tf.q) >= 0); }); }
+        function draw() {
+          var seen = {}; lm.options(D.targets.filter(function (t) { if (seen[t.location]) return false; seen[t.location] = 1; return true; }).map(function (t) { return { value: t.location, label: t.location }; }));
+          var v = vis();
+          $('tCount').textContent = D.targets.length + ' targets' + (v.length !== D.targets.length ? ', ' + v.length + ' shown' : '');
+          $('tB').innerHTML = v.map(function (x) { var t = x[0], i = x[1];
+            return '<tr' + (picked[i] ? ' class="sel"' : '') + '><td class="w0"><input type="checkbox" data-pk="' + i + '"' + (picked[i] ? ' checked' : '') + '></td><td class="w0"><label class="switch"><input type="checkbox" data-i="' + i + '" data-k="enabled"' + (t.enabled ? ' checked' : '') + '></label></td>' +
+              '<td><input data-i="' + i + '" data-k="location" value="' + esc(t.location) + '" style="width:100%"></td><td><input data-i="' + i + '" data-k="host" value="' + esc(t.host) + '" style="width:100%" class="mono"></td>' +
+              '<td class="w0"><button class="btn-xs btn-g btn-i" data-rm="' + i + '" title="Remove">' + I('trash') + '</button></td></tr>'; }).join('') || '<tr><td colspan="5" class="empty">No targets.</td></tr>';
+          [].forEach.call($('tB').querySelectorAll('[data-k]'), function (e) { e.addEventListener(e.type === 'checkbox' ? 'change' : 'input', function () { D.targets[+e.dataset.i][e.dataset.k] = e.type === 'checkbox' ? e.checked : e.value.trim(); dirty(); }); });
+          [].forEach.call($('tB').querySelectorAll('[data-rm]'), function (b) { b.onclick = function () { D.targets.splice(+b.dataset.rm, 1); picked = {}; dirty(); draw(); }; });
+          [].forEach.call($('tB').querySelectorAll('[data-pk]'), function (b) { b.onchange = function () { if (b.checked) picked[b.dataset.pk] = 1; else delete picked[b.dataset.pk]; draw(); }; });
+          $('tAll').checked = v.length && v.every(function (x) { return picked[x[1]]; });
+          $('tAll').onchange = function () { var on = this.checked; v.forEach(function (x) { if (on) picked[x[1]] = 1; else delete picked[x[1]]; }); draw(); };
+          var n = Object.keys(picked).length;
+          $('tBulk').innerHTML = n ? '<span class="pill info">' + n + ' selected</span><button class="btn-s" data-b="on">Enable</button><button class="btn-s" data-b="off">Disable</button><button class="btn-s" data-b="loc">Set location…</button><button class="btn-s btn-d" data-b="rm">' + I('trash') + 'Remove</button>' : '';
+          [].forEach.call($('tBulk').querySelectorAll('[data-b]'), function (b) { b.onclick = function () {
+            var idx = Object.keys(picked).map(Number).sort(function (a, c) { return c - a; });
+            if (b.dataset.b === 'loc') { var l = prompt('Location for the ' + idx.length + ' selected targets'); if (!l) return; idx.forEach(function (i) { D.targets[i].location = l.trim(); }); }
+            else if (b.dataset.b === 'rm') { if (!confirm('Remove ' + idx.length + ' targets?')) return; idx.forEach(function (i) { D.targets.splice(i, 1); }); picked = {}; }
+            else idx.forEach(function (i) { D.targets[i].enabled = b.dataset.b === 'on'; });
+            dirty(); draw(); }; });
+        }
+        $('tAdd').onclick = function () { var l = D.targets[D.targets.length - 1]; D.targets.push({ location: l ? l.location : '', host: '', enabled: true }); dirty(); tf.q = ''; $('tQ').value = ''; draw();
+          var ins = $('tB').querySelectorAll('[data-k=host]'); if (ins.length) ins[ins.length - 1].focus(); };
+        $('tPaste').onclick = function () {
+          HW.modal('Paste targets', '<p class="small muted">One per line: <code>Location, IP</code> or only <code>IP</code>. Tabs and semicolons work too. Duplicates are skipped.</p><textarea id="bulk" placeholder="Frankfurt, 192.0.2.10&#10;Frankfurt, 192.0.2.11&#10;198.51.100.7"></textarea>', '<button class="btn-g" id="bx">Cancel</button><button class="btn-p" id="bo">Add</button>');
+          $('bx').onclick = HW.closeModal;
+          $('bo').onclick = function () { var n = 0; $('bulk').value.split(/\n/).forEach(function (l) { l = l.trim(); if (!l) return; var p = l.split(/[,;\t]/).map(function (x) { return x.trim(); });
+            var host = p.length > 1 ? p[1] : p[0]; if (!D.targets.some(function (t) { return t.host === host; })) { D.targets.push({ location: p[0], host: host, enabled: true }); n++; } });
+            HW.closeModal(); dirty(); draw(); HW.toast(n + ' added – press Save'); };
+        };
+        draw();
+      }
+      show();
     }).catch(fail);
   }
 
   window.addEventListener('hashchange', route);
   loadInfo().then(route).catch(fail);
-  setInterval(loadInfo, 30000);
+  setInterval(function () { loadInfo().catch(function () { /* banner shows it */ }); }, 30000);
 })();

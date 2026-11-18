@@ -11,11 +11,16 @@ from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import auth as authmod
+import evidence
 import netdata_import
 from config import VERSION, ConfigError
 
 log = logging.getLogger("web")
 STATIC = os.path.join(os.path.dirname(__file__), "static")
+# shared UI kit: next to the app in the image, at the repo root when run from a checkout
+UI = next((d for d in (os.environ.get("HOPWATCH_UI"), os.path.join(os.path.dirname(__file__), "ui"),
+                       os.path.join(os.path.dirname(__file__), "..", "..", "ui")) if d and os.path.isdir(d)), STATIC)
+UI = os.path.abspath(UI)
 COOKIE = "hopwatch_session"
 
 
@@ -163,8 +168,11 @@ class Handler(BaseHTTPRequestHandler):
     def _static(self, path):
         if path in ("", "/"):
             path = "/index.html"
-        full = os.path.normpath(os.path.join(STATIC, path.lstrip("/")))
-        if not full.startswith(STATIC + os.sep) or not os.path.isfile(full):
+        root, rel = (UI, path[4:]) if path.startswith("/ui/") else (STATIC, path.lstrip("/"))
+        full = os.path.normpath(os.path.join(root, rel))
+        if not full.startswith(root + os.sep) or not os.path.isfile(full):
+            if path.startswith("/ui/") or "." in os.path.basename(path):
+                return self._err(404, "not found")
             full = os.path.join(STATIC, "index.html")
         with open(full, "rb") as f:
             data = f.read()
@@ -206,11 +214,9 @@ def api_series(h, q, _):
         raise ValueError("'from' must be before 'to'")
     points = int(q.get("points") or 300)
     targets = [t for t in c["targets"]]
-    if q.get("location"):
-        targets = [t for t in targets if t["location"] == q["location"]]
-    if q.get("host"):
-        want = set(q["host"].split(","))
-        targets = [t for t in targets if t["host"] in want]
+    hosts, locs = set(_list(q, "host")), set(_list(q, "location"))
+    if hosts or locs:      # a target is shown when its IP or its location is picked
+        targets = [t for t in targets if t["host"] in hosts or t["location"] in locs]
     with a.pinger.lock:
         live = {k: list(v) for k, v in a.pinger.minutes.items()}
     data, tier, step = a.store.series([t["host"] for t in targets], int(t0), int(t1), points, c["retention"], now, live)
@@ -243,23 +249,97 @@ def api_series(h, q, _):
     return {"tier": tier, "step": step, "from": t0, "to": t1, "columns": ["t", "avg", "loss", "jitter", "max"], "series": out}
 
 
+def _list(q, k):
+    return [x for x in (q.get(k) or "").split(",") if x]
+
+
+def _f(q, k):
+    return float(q[k]) if q.get(k) else None
+
+
 def api_events(h, q, _):
-    return {"events": h.app.store.events(float(q["from"]) if q.get("from") else None,
-                                         float(q["to"]) if q.get("to") else None, int(q.get("limit") or 500))}
+    return {"events": h.app.store.events(_f(q, "from"), _f(q, "to"), int(q.get("limit") or 500),
+                                         _list(q, "host"), _list(q, "kind"))}
 
 
 def api_mtr_list(h, q, _):
     a = h.app
-    return {"runs": a.store.mtr_list(int(q.get("limit") or 200), q.get("host"),
-                                     float(q["from"]) if q.get("from") else None,
-                                     float(q["to"]) if q.get("to") else None), **a.mtr.busy()}
+    return {"runs": a.store.mtr_list(int(q.get("limit") or 200), _list(q, "host"), _f(q, "from"), _f(q, "to"),
+                                     _list(q, "trig"), _list(q, "status")), **a.mtr.busy()}
 
 
 def api_mtr_get(h, q, rid):
     r = h.app.store.mtr_get(int(rid))
     if not r:
         raise KeyError("no such MTR run")
+    r["previous"] = h.app.store.mtr_previous(int(rid))
     return r
+
+
+def _download(h, data, name, ctype):
+    h._send(200, data if isinstance(data, bytes) else data.encode(), ctype,
+            {"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+def _stamp():
+    return time.strftime("%Y%m%d-%H%M%SZ", time.gmtime())
+
+
+def api_mtr_export(h, q, _):
+    """?ids=1,2,3&format=zip|txt|json"""
+    ids = [int(x) for x in _list(q, "ids")][:1000]
+    if not ids:
+        raise ValueError("pass ids")
+    runs = [h.app.store.mtr_get(i) for i in ids]
+    runs = [r for r in runs if r]
+    fmt = q.get("format") or "zip"
+    if fmt == "txt":
+        return _download(h, evidence.runs_text(runs), f"mtr-{_stamp()}.txt", "text/plain; charset=utf-8")
+    if fmt == "json":
+        return _download(h, json.dumps(runs, indent=1), f"mtr-{_stamp()}.json", "application/json")
+    _download(h, evidence.runs_zip(runs), f"mtr-{_stamp()}.zip", "application/zip")
+
+
+def _window(h, q, max_points=20000):
+    """Targets, time window and series data for exports (fine resolution: every ping for short windows)."""
+    a = h.app
+    c = a.cfg.get()
+    now = time.time()
+    t1 = _f(q, "to") or now
+    t0 = _f(q, "from") or t1 - 3600
+    if t1 <= t0:
+        raise ValueError("'from' must be before 'to'")
+    targets = c["targets"]
+    hosts, locs = set(_list(q, "host")), set(_list(q, "location"))
+    if hosts or locs:
+        targets = [t for t in targets if t["host"] in hosts or t["location"] in locs]
+        if not targets:
+            raise ValueError("none of the picked targets or locations exist (any more)")
+    with a.pinger.lock:
+        live = {k: list(v) for k, v in a.pinger.minutes.items()}
+    points = min(max_points, int(q.get("points") or max_points))
+    data, tier, step = a.store.series([t["host"] for t in targets], int(t0), int(t1), points, c["retention"], now, live,
+                                      max_points=max_points)
+    return c, targets, t0, t1, data, step
+
+
+def api_series_csv(h, q, _):
+    c, targets, t0, t1, data, step = _window(h, q)
+    _download(h, evidence.series_csv(data, targets, step), f"ping-{_stamp()}.csv", "text/csv; charset=utf-8")
+
+
+def api_evidence(h, q, _):
+    """ZIP with summary, ping data, events and MTR runs for a window (and optional targets / locations)."""
+    a = h.app
+    c, targets, t0, t1, data, step = _window(h, q)
+    hosts = [t["host"] for t in targets]
+    events = a.store.events(t0, t1, 100000, hosts)
+    margin = 600      # include runs that started a little before or after the window
+    runs = [a.store.mtr_get(r["id"]) for r in a.store.mtr_list(5000, hosts, t0 - margin, t1 + margin)]
+    site = c["site_name"] or a.hostname
+    blob = evidence.pack(site, a.mtr.public_ip.get(c["mtr"]["public_ip_url"]), t0, t1, targets, data, step, events, runs,
+                         (q.get("note") or "")[:500])
+    _download(h, blob, f"hopwatch-evidence-{site.replace(' ', '_')}-{_stamp()}.zip", "application/zip")
 
 
 def api_mtr_report(h, q, rid):
@@ -410,6 +490,9 @@ ROUTES = {
     ("GET", "/api/mtr"): (api_mtr_list, "view"),
     ("GET", "/api/mtr/{id}"): (api_mtr_get, "view"),
     ("GET", "/api/mtr/report/{id}"): (api_mtr_report, "view"),
+    ("GET", "/api/mtr/export"): (api_mtr_export, "view"),
+    ("GET", "/api/series.csv"): (api_series_csv, "view"),
+    ("GET", "/api/evidence"): (api_evidence, "view"),
     ("POST", "/api/mtr"): (api_mtr_start, "admin"),
     ("POST", "/api/mtr/cancel/{id}"): (api_mtr_cancel, "admin"),
     ("GET", "/api/config"): (api_config_get, "admin"),

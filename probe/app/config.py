@@ -20,8 +20,13 @@ DEFAULTS = {
     ],
     "ping": {"interval_ms": 1000, "timeout_ms": 1000, "size": 56},
     "alerts": {"window_s": 60, "loss_warn": 5, "loss_crit": 20, "rtt_warn_ms": 0, "rtt_crit_ms": 0},
+    # Automatic MTR: when something goes wrong (and once more when it is fixed), so there is evidence
     "auto_mtr": {"enabled": True, "loss_pct": 20, "window_s": 60, "cooldown_min": 30,
-                 "per_location": True, "max_per_hour": 20, "mode": "icmp"},
+                 "per_location": True, "max_per_hour": 20, "mode": "icmp",
+                 "on_down": True, "on_latency": False, "latency_ms": 0, "latency_rise_ms": 100,
+                 "on_recovery": True},
+    # Periodic MTR: a baseline of the normal path, to compare with when there is a problem
+    "schedules": [],
     "mtr": {"cycles": 100, "interval_s": 1.0, "resolve": True, "asn": True, "max_parallel": 4,
             "public_ip_url": "https://api.ipify.org"},
     "tcp_check": {"enabled": True, "port": 443, "every_h": 24},
@@ -43,6 +48,8 @@ LIMITS = {
     ("auto_mtr", "window_s"): (int, 10, 3600),
     ("auto_mtr", "cooldown_min"): (int, 1, 1440),
     ("auto_mtr", "max_per_hour"): (int, 1, 500),
+    ("auto_mtr", "latency_ms"): (float, 0, 60000),
+    ("auto_mtr", "latency_rise_ms"): (float, 0, 60000),
     ("mtr", "cycles"): (int, 5, 1000),
     ("mtr", "interval_s"): (float, 0.1, 10),
     ("mtr", "max_parallel"): (int, 1, 16),
@@ -54,7 +61,8 @@ LIMITS = {
     ("retention", "mtr_days"): (int, 1, 3650),
     ("retention", "mtr_max"): (int, 10, 100000),
 }
-BOOLS = {("auto_mtr", "enabled"), ("auto_mtr", "per_location"), ("mtr", "resolve"), ("mtr", "asn"),
+BOOLS = {("auto_mtr", "enabled"), ("auto_mtr", "per_location"), ("auto_mtr", "on_down"), ("auto_mtr", "on_latency"),
+         ("auto_mtr", "on_recovery"), ("mtr", "resolve"), ("mtr", "asn"),
          ("tcp_check", "enabled"), ("security", "view_requires_login")}
 CHOICES = {("auto_mtr", "mode"): ("icmp", "tcp", "tcp_if_open")}
 
@@ -126,7 +134,31 @@ def validate(cfg: dict) -> dict:
     if len(targets) > 500:
         raise ConfigError("at most 500 targets")
     c["targets"] = targets
+    c["schedules"] = [_schedule(x, seen) for x in (c.get("schedules") or [])]
+    if len(c["schedules"]) > 50:
+        raise ConfigError("at most 50 schedules")
     return c
+
+
+def _schedule(x, hosts) -> dict:
+    name = str(x.get("name") or "").strip()[:60] or "Schedule"
+    try:
+        every, cycles = int(x.get("every_min") or 60), int(x.get("cycles") or 100)
+    except (TypeError, ValueError):
+        raise ConfigError(f"schedule '{name}': not a number")
+    if not 5 <= every <= 10080:
+        raise ConfigError(f"schedule '{name}': every 5 to 10080 minutes")
+    if not 5 <= cycles <= 1000:
+        raise ConfigError(f"schedule '{name}': 5 to 1000 cycles")
+    mode = x.get("mode") or "icmp"
+    if mode not in ("icmp", "tcp", "udp", "tcp_if_open"):
+        raise ConfigError(f"schedule '{name}': unknown mode")
+    sel = [h for h in (x.get("hosts") or []) if h in hosts]     # removed targets drop out silently
+    sid = str(x.get("id") or "") or os.urandom(4).hex()
+    if not re.match(r"^[0-9a-zA-Z_-]{1,24}$", sid):
+        raise ConfigError("bad schedule id")
+    return {"id": sid, "name": name, "enabled": bool(x.get("enabled", True)), "hosts": sel,
+            "every_min": every, "cycles": cycles, "mode": mode}
 
 
 class Config:

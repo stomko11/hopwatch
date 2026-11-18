@@ -116,6 +116,9 @@ class Store:
             self.db.execute("""CREATE TABLE IF NOT EXISTS mtr (id INTEGER PRIMARY KEY, created REAL, started REAL,
                 finished REAL, host TEXT, location TEXT, mode TEXT, port INTEGER, cycles INTEGER, trig TEXT,
                 reason TEXT, status TEXT, error TEXT, dst_loss REAL, hops INTEGER, result TEXT, report TEXT)""")
+            cols = {r[1] for r in self.db.execute("PRAGMA table_info(mtr)")}
+            if "schedule" not in cols:       # added in 0.2
+                self.db.execute("ALTER TABLE mtr ADD COLUMN schedule TEXT")
             self.db.execute("CREATE INDEX IF NOT EXISTS mtr_created ON mtr(created)")
             self.db.execute("""CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, t REAL, kind TEXT,
                 host TEXT, location TEXT, level TEXT, data TEXT)""")
@@ -184,11 +187,11 @@ class Store:
         return n
 
     # ---------------------------------------------------------------- reads
-    def series(self, hosts, t0: int, t1: int, points: int, retention: dict, now=None, live=None):
+    def series(self, hosts, t0: int, t1: int, points: int, retention: dict, now=None, live=None, max_points=2000):
         """Buckets for each host: {host: [(t, acc_dict or None)]}, plus the tier used and the bucket step.
         live: {(host, minute): slots} not yet written (the current minute), merged into raw reads."""
         now = now or time.time()
-        points = max(10, min(2000, int(points)))
+        points = max(10, min(max_points, int(points)))
         span = max(60, t1 - t0)
         step = max(1, span / points)
         if step < 60 and t0 >= now - retention["raw_days"] * 86400 - 60:
@@ -274,13 +277,16 @@ class Store:
         with self.lock:
             self.db.execute(f"UPDATE mtr SET {','.join(k + '=?' for k in kw)} WHERE id=?", (*kw.values(), rid))
 
-    MTR_LIST = "id, created, started, finished, host, location, mode, port, cycles, trig, reason, status, error, dst_loss, hops"
+    MTR_LIST = "id, created, started, finished, host, location, mode, port, cycles, trig, reason, status, error, dst_loss, hops, schedule"
 
-    def mtr_list(self, limit=200, host=None, t0=None, t1=None):
+    def mtr_list(self, limit=200, host=None, t0=None, t1=None, trig=None, status=None, ids=None):
+        """host, trig, status and ids may be one value or a list."""
         q, a = f"SELECT {self.MTR_LIST} FROM mtr WHERE 1=1", []
-        if host:
-            q += " AND host=?"
-            a.append(host)
+        for col, val in (("host", host), ("trig", trig), ("status", status), ("id", ids)):
+            if val:
+                vals = val if isinstance(val, (list, tuple, set)) else [val]
+                q += f" AND {col} IN ({','.join('?' * len(vals))})"
+                a.extend(vals)
         if t0:
             q += " AND created>=?"
             a.append(t0)
@@ -292,6 +298,33 @@ class Store:
         names = [c.strip() for c in self.MTR_LIST.split(",")]
         with self.lock:
             return [dict(zip(names, r)) for r in self.db.execute(q, a)]
+
+    def mtr_last_schedule(self, sid: str):
+        with self.lock:
+            r = self.db.execute("SELECT MAX(created) FROM mtr WHERE schedule=?", (sid,)).fetchone()
+        return r[0] if r else None
+
+    def mtr_previous(self, rid: int):
+        """The finished run to the same host just before this one (to compare paths)."""
+        with self.lock:
+            r = self.db.execute("""SELECT b.id FROM mtr a JOIN mtr b ON b.host=a.host AND b.id<a.id AND b.status='done'
+                                   WHERE a.id=? ORDER BY b.id DESC LIMIT 1""", (rid,)).fetchone()
+        return r[0] if r else None
+
+    def median_avg(self, host: str, seconds: int, now=None):
+        """Median of the 1-minute average RTTs over the last `seconds` (ms), or None."""
+        now = now or time.time()
+        vals = []
+        with self.lock:
+            for base, d in self.db.execute("SELECT t, d FROM m1 WHERE host=? AND t>=?", (host, now - seconds - 3600)):
+                for i in range(60):
+                    sent, lost, mn, avg, mx, jit = REC.unpack_from(d, i * REC.size)
+                    if sent > lost and now - seconds <= base + i * 60 < now - 300:
+                        vals.append(avg)
+        if len(vals) < 30:
+            return None
+        vals.sort()
+        return vals[len(vals) // 2] / 10
 
     def mtr_get(self, rid: int):
         with self.lock:
@@ -308,8 +341,12 @@ class Store:
             self.db.execute("INSERT INTO events (t, kind, host, location, level, data) VALUES (?,?,?,?,?,?)",
                             (time.time(), kind, host, location, level, json.dumps(data) if data else None))
 
-    def events(self, t0=None, t1=None, limit=500):
+    def events(self, t0=None, t1=None, limit=500, hosts=None, kinds=None):
         q, a = "SELECT t, kind, host, location, level, data FROM events WHERE 1=1", []
+        for col, vals in (("host", hosts), ("kind", kinds)):
+            if vals:
+                q += f" AND {col} IN ({','.join('?' * len(vals))})"
+                a.extend(vals)
         if t0:
             q += " AND t>=?"
             a.append(t0)
