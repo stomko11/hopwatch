@@ -76,6 +76,7 @@ def api_series(h, q, _):
         live = {k: list(v) for k, v in a.pinger.minutes.items()}
     data, tier, step = a.store.series([t["host"] for t in targets], int(t0), int(t1), points, c["retention"], now, live)
     group = q.get("group") or "host"
+    worst = q.get("agg") == "worst"    # a group as its worst IP per moment (what the hub correlates) instead of the average
     out = []
     if group in ("location", "role"):
         # "role" keeps the roles of a location apart: "AMS · ISP" and "AMS · FX" are never averaged together
@@ -96,6 +97,10 @@ def api_series(h, q, _):
                 lost = sum(v["lost"] for v in vals)
                 avgs = [v["avg"] for v in vals if v["avg"] is not None]
                 jits = [v["jitter"] for v in vals if v["jitter"] is not None]
+                if worst:
+                    buckets.append([ts, max(avgs) if avgs else None, round(max(v["loss"] for v in vals), 2),
+                                    max(jits) if jits else None, max(v["max"] or 0 for v in vals) or None])
+                    continue
                 buckets.append([ts, round(sum(avgs) / len(avgs), 2) if avgs else None, round(100.0 * lost / sent, 2),
                                 round(sum(jits) / len(jits), 2) if jits else None, max(v["max"] or 0 for v in vals) or None])
             out.append({"name": loc, "location": meta[loc][0], "role": meta[loc][1], "group": loc, "hosts": hosts, "points": buckets})

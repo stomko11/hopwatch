@@ -309,3 +309,24 @@ class ImportTest(unittest.TestCase):
             netdata_import.targets = old
         self.assertEqual([(t["name"], t["location"], t["role"]) for t in out],
                          [("", "AMS", "ISP"), ("", "AMS", "FX"), ("Cloudflare DNS", "", "EXTERNAL")])
+
+
+class SeriesAggTest(unittest.TestCase):
+    """group=role&agg=worst: a location's loss is its worst IP, not the average of its IPs."""
+    def test_worst(self):
+        import web
+        c = config.validate({"targets": [{"location": "BUL", "host": "192.0.2.1", "role": "FX"},
+                                         {"location": "BUL", "host": "192.0.2.2", "role": "FX"}]})
+        acc = lambda loss: {"sent": 100, "lost": loss, "loss": float(loss), "avg": 10.0, "jitter": 1.0, "max": 12.0}
+
+        class A:
+            pass
+        a = A()
+        a.cfg = type("C", (), {"get": lambda s: c})()
+        a.pinger = type("P", (), {"lock": __import__("threading").Lock(), "minutes": {}})()
+        a.store = type("S", (), {"series": lambda s, hosts, t0, t1, pts, ret, now, live: (
+            {"192.0.2.1": [(0, acc(25))], "192.0.2.2": [(0, acc(0))]}, "raw", 60)})()
+        h = type("H", (), {"app": a})()
+        avg = web.api_series(h, {"from": "0", "to": "60", "group": "role"}, None)["series"][0]["points"][0][2]
+        worst = web.api_series(h, {"from": "0", "to": "60", "group": "role", "agg": "worst"}, None)["series"][0]["points"][0][2]
+        self.assertEqual((avg, worst), (12.5, 25.0))

@@ -92,7 +92,7 @@ def _series(h, q, group="host"):
     if t1 <= t0:
         raise ValueError("'from' must be before 'to'")
     pts = int(q.get("points") or 300)
-    qs = f"/api/series?from={int(t0)}&to={int(t1)}&points={pts}&group={group}"
+    qs = f"/api/series?from={int(t0)}&to={int(t1)}&points={pts}&group={group}" + ("&agg=worst" if q.get("agg") == "worst" else "")
     for k in ("host", "location"):
         if q.get(k):
             qs += f"&{k}=" + urllib.parse.quote(q[k])
@@ -191,10 +191,17 @@ def api_overview(h, q, _):
                     "v": [round(pts[t], 2) if t in pts else None for t in grid_t]} for loc, pts in locd.items()]
             out = sorted([x for x in out if x["peak"] > 0], key=lambda x: -x["peak"])[:20]
             by_probe[p][sig] = out
-    verdict = {}
+    verdict, sigv = {}, {}
     for i in corr_b["incidents"]:
         v = verdict.setdefault(i["location"], {"target": set(), "one": set()})
         (v["target"] if i["kind"] == "target" else v["one"]).update(i["site_names"])
+        # per signal: which sites saw it together (at the same moment) and which only on their own
+        s = sigv.setdefault((i["location"], i["signal"]), {"together": set(), "alone": set(), "together_s": 0})
+        if i["kind"] == "target":
+            s["together"].update(i["site_names"])
+            s["together_s"] += int(i["t1"] - i["t0"]) + step
+        else:
+            s["alone"].update(i["site_names"])
     rows = {}
     for hst, by in grid.items():
         loc = locs[hst]
@@ -218,8 +225,10 @@ def api_overview(h, q, _):
                      "max_loss": round(max(b["loss"]), 1) if b["loss"] else None,
                      "jitter": round(sum(b["jit"]) / len(b["jit"]), 2) if b["jit"] else None}
         v = verdict.get(loc, {"target": set(), "one": set()})
+        sig = {sg: {"together": sorted(x["together"]), "alone": sorted(x["alone"]), "together_s": x["together_s"]}
+               for (lc, sg), x in sigv.items() if lc == loc}
         out_rows.append({"location": loc, "hosts": sorted(r["hosts"]), "by": by,
-                         "several": sorted(v["target"]), "one": sorted(v["one"] - v["target"])})
+                         "several": sorted(v["target"]), "one": sorted(v["one"] - v["target"]), "sig": sig})
     return {"from": t0, "to": t1, "step": step, "probes": [{"id": p["id"], "name": p["name"]} for p in ps],
             "lines": lines, "by_probe": by_probe, "min_sites": K, "all_sites": not k["min_sites"],
             "incidents": [{k2: i[k2] for k2 in ("t0", "t1", "kind", "location", "host", "signal", "site_names")} for i in corr_b["incidents"]][:500], "thresholds": th, "simultaneous": corr_b["buckets"], "locations": out_rows,
