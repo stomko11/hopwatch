@@ -28,7 +28,9 @@
   function nav() {
     $('nav').innerHTML = NAV.map(function (n) { return '<a href="#/' + n[0] + '" class="' + (S.view === n[0] ? 'on' : '') + '">' + I(n[1]) + '<span class="lbl">' + n[2] + '</span></a>'; }).join('');
     $('loginBtn').innerHTML = admin() ? I('out') + 'Log out' : S.info && !S.info.auth.password_set ? I('lock') + 'Set password' : I('lock') + 'Log in';
-    $('themeBtn').innerHTML = I(document.documentElement.getAttribute('data-theme') === 'light' ? 'moon' : 'sun');
+    var th = HW.ls('theme') || 'auto';
+    $('themeBtn').innerHTML = th === 'auto' ? '<span class="xs" style="font-weight:700">A</span>' : I(th === 'light' ? 'sun' : 'moon');
+    $('themeBtn').title = 'Theme: ' + { auto: 'auto (follows the system)', dark: 'dark', light: 'light' }[th] + ' – click to change';
     $('prefsBtn').innerHTML = I('more');
   }
   function loadInfo() { return api('/api/info').then(function (i) { S.info = i; $('site').textContent = i.site; document.title = i.site; nav(); return i; }); }
@@ -48,12 +50,14 @@
     if (S.info && !S.info.probes && S.view !== 'settings') return noProbes();
     ({ overview: vOverview, incidents: vIncidents, compare: vCompare, mtr: vMtr, run: vRun, evidence: vEvidence, settings: vSettings }[S.view] || vOverview)();
   }
-  HW.seg($('tzSeg'), [['local', 'Local'], ['utc', 'UTC']], HW.tz, function (v) { HW.tz = v; HW.ls('tz', v); route(); });
+  HW.seg($('tzSeg'), HW.TZ, HW.tz, function (v) { HW.tz = v; HW.ls('tz', v); route(); });
   $('prefsBtn').onclick = function () {
     HW.prefs(this, { login: $('loginBtn').innerHTML, onLogin: function () { $('loginBtn').click(); },
-      onChange: function () { HW.seg($('tzSeg'), [['local', 'Local'], ['utc', 'UTC']], HW.tz, function (v) { HW.tz = v; HW.ls('tz', v); route(); }); route(); } });
+      onChange: function () { HW.seg($('tzSeg'), HW.TZ, HW.tz, function (v) { HW.tz = v; HW.ls('tz', v); route(); }); route(); } });
   };
-  $('themeBtn').onclick = function () { HW.theme(document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light'); route(); };
+  $('themeBtn').onclick = function () { var order = ['auto', 'dark', 'light'], cur = HW.ls('theme') || 'auto';
+    var nxt = order[(order.indexOf(cur) + 1) % 3]; HW.theme(nxt); HW.toast('Theme: ' + { auto: 'follows the system', dark: 'dark', light: 'light' }[nxt]); route(); };
+  HW.onTheme = function () { route(); };
   $('loginBtn').onclick = function () {
     if (admin()) api('/api/logout', { method: 'POST' }).then(function () { loadInfo().then(route); });
     else if (S.info && !S.info.auth.password_set) setup(); else loginBox(false);
@@ -125,9 +129,8 @@
     f.range = f.range || 'live';
     var locMs = null, ov = null, hidden = { loss: {}, ex: {}, jit: {}, sim: {} };
     $('main').innerHTML = '<div class="row"><span id="ovR"></span><span class="grow"></span><span class="xs muted" id="ovUpd"></span></div><div class="kpis" id="kpis"></div><div class="row" id="pstrip"></div>' +
-      '<div class="cgrid">' + [['loss', 'Packet loss', 'average over all targets, % · one line per site'], ['ex', 'Latency above normal', 'ms over each target\u2019s own usual latency'],
-        ['jit', 'Jitter', 'average over all targets, ms'], ['sim', 'Seen at the same time', 'IPs over the limits: red = several sites, amber = one site, purple = one site\u2019s link']].map(function (c) {
-        return '<div class="card"><div class="hd"><h2>' + c[1] + '</h2><span class="sub">' + c[2] + '</span></div><div class="bd"><div id="oc_' + c[0] + '"><div class="empty" style="height:150px;display:flex;align-items:center;justify-content:center">Loading…</div></div></div></div>'; }).join('') + '</div>' +
+      '<div class="cgrid">' + [['loss', 'Loss seen from all sites'], ['ex', 'Latency rise seen from all sites'], ['jit', 'Jitter seen from all sites'], ['sim', 'How many IPs had problems']].map(function (c) {
+        return '<div class="card"><div class="hd"><h2>' + c[1] + '</h2><span class="sub" id="os_' + c[0] + '"></span></div><div class="bd"><div id="oc_' + c[0] + '"><div class="empty" style="height:160px;display:flex;align-items:center;justify-content:center">Loading…</div></div></div></div>'; }).join('') + '</div>' +
       '<div class="card"><div class="hd"><h2>Locations</h2><span class="sub" id="ovSub"></span></div><div class="bd col gap12"><div class="row"><div class="search" style="width:240px">' + I('search') + '<input id="ovQ" placeholder="Filter" value="' + esc(f.q) + '"></div><span id="ovOnly"></span><div id="ovL"></div></div><div class="tw" id="mx"></div></div></div>';
     $('ovQ').oninput = function () { f.q = this.value.toLowerCase(); HW.ls('hovf', f); draw(); };
     HW.seg($('ovOnly'), [['all', 'All'], ['bad', 'Problems only']], f.only, function (v) { f.only = v; HW.ls('hovf', f); draw(); });
@@ -135,19 +138,22 @@
     function rangeSec() { return f.range === 'live' ? 3600 : +f.range; }
     function charts() {
       if (!ov) return;
-      var t1 = ov.to, t0 = ov.from, names = {}; ov.probes.forEach(function (p) { names[p.id] = p.name; });
-      var order = ov.probes.map(function (p) { return p.id; });
-      var mk = function (k) { return order.filter(function (p) { return ov.lines[p]; }).map(function (p, i) { var l = ov.lines[p];
-        return { name: names[p], color: HW.color('site|' + p), dash: i % 2 === 1, t: l.t, v: l[k] }; }); };
-      var o = function (key, unit, pct, extra) { return Object.assign({ t0: t0, t1: t1, unit: unit, pct: pct, height: 150, legend: true, hidden: hidden[key],
+      var t1 = ov.to, t0 = ov.from, K = ov.min_sites, th = ov.thresholds, who = K > 1 ? 'at least ' + K + ' sites at the same moment' : 'the site';
+      $('os_loss').textContent = '% lost, as seen by ' + who + ' (over ' + th.loss + '%) · one line per location';
+      $('os_ex').textContent = 'ms above each site\u2019s normal, seen by ' + who + ' (over ' + th.delay + ' ms)';
+      $('os_jit').textContent = 'ms, seen by ' + who + ' (over ' + th.jitter + ' ms)';
+      $('os_sim').textContent = 'red = several sites, amber = one site only, purple = one site\u2019s own link';
+      var mk = function (k) { return (ov.lines[k] || []).map(function (l) { return { name: l.name, color: HW.color('loc|' + l.name), t: l.t, v: l.v }; }); };
+      var none = K > 1 ? 'Nothing seen from all sites at the same time' : 'Nothing over the limit';
+      var o = function (key, unit, pct, extra) { return Object.assign({ t0: t0, t1: t1, unit: unit, pct: pct, height: 160, legend: true, hidden: hidden[key], peakLabels: true, emptyText: none,
         onZoom: function (a, b) { location.hash = '#/incidents?from=' + Math.floor(a) + '&to=' + Math.ceil(b); } }, extra || {}); };
       HW.chart($('oc_loss'), mk('loss'), o('loss', '%', true));
-      HW.chart($('oc_ex'), mk('excess'), o('ex', 'ms'));
+      HW.chart($('oc_ex'), mk('delay'), o('ex', 'ms'));
       HW.chart($('oc_jit'), mk('jitter'), o('jit', 'ms'));
       var t = ov.simultaneous.map(function (b) { return b[0]; });
       HW.chart($('oc_sim'), [{ name: 'Several sites', color: HW.cssv('--bad'), t: t, v: ov.simultaneous.map(function (b) { return b[1]; }) },
         { name: 'One site', color: HW.cssv('--warn'), t: t, v: ov.simultaneous.map(function (b) { return b[2]; }) },
-        { name: 'Site link', color: HW.cssv('--purple'), t: t, v: ov.simultaneous.map(function (b) { return b[3]; }) }], o('sim', 'IPs', false, { bars: true, step: ov.step }));
+        { name: 'Site link', color: HW.cssv('--purple'), t: t, v: ov.simultaneous.map(function (b) { return b[3]; }) }], o('sim', 'IPs', false, { bars: true, step: ov.step, peakLabels: false, emptyText: 'No problems' }));
     }
     function loadOv() {
       var t1 = Math.floor(Date.now() / 15000) * 15, W = ($('oc_loss') && $('oc_loss').clientWidth) || 600;   // rounded: repeated loads hit the hub's cache
@@ -193,13 +199,19 @@
         .sort(function (a, b) { var r = { bad: 2, warn: 1, ok: 0 }; return r[verdict(locs[b])[0]] - r[verdict(locs[a])[0]] || a.localeCompare(b); });
       $('ovSub').textContent = order.length + ' locations · ' + ps.length + ' sites · ' + (live ? 'live, last ' + l.probes.filter(function (p) { return p.window_s; }).map(function (p) { return p.window_s; })[0] + ' s' : 'average and worst ' + rl);
       $('ovUpd').textContent = 'updated ' + HW.ftime(l.now);
-      $('mx').innerHTML = '<table class="table"><thead><tr><th>Location</th>' + ps.map(function (p) { return '<th>' + esc(p.name) + '</th>'; }).join('') + '<th>Verdict</th><th class="w0"></th></tr></thead><tbody>' +
-        rows.map(function (x) { var L = locs[x], v = verdict(L);
-          return '<tr><td><b>' + esc(x) + '</b> <span class="xs muted">' + Object.keys(L.hosts).length + ' IP</span></td>' + ps.map(function (p) { var c = L.by[p.id];
-            if (!c) return '<td class="faint">–</td>';
-            return '<td><span class="row wrapn gap4"><span class="dot ' + c.st + '"></span><span class="num">' + (c.st === 'down' ? '<span class="down">down</span>' : HW.fnum(c.avgv) + '<span class="faint"> ms</span>') + '</span>' +
-              (c.loss > 0 ? '<span class="num ' + (RANK[c.st] >= 3 ? 'bad' : 'warn') + '" title="' + (live ? 'loss now' : 'average loss; worst moment ' + HW.fnum(c.max, 0) + '%') + '">' + HW.fnum(c.loss, c.loss < 1 ? 1 : 0) + '%' + (!live && c.max > c.loss ? '<span class="faint"> ↑' + HW.fnum(c.max, 0) + '</span>' : '') + '</span>' : '') + '</span></td>'; }).join('') +
-            '<td><span class="pill ' + v[0] + '">' + esc(v[1]) + '</span></td><td class="w0"><button class="btn-xs btn-g btn-i" data-loc="' + esc(x) + '">' + I('more') + '</button></td></tr>'; }).join('') + '</tbody></table>';
+      var cell = function (c) {
+        if (!c) return '<span class="faint">–</span>';
+        return '<span class="row wrapn gap4"><span class="dot ' + c.st + '"></span><span class="num">' + (c.st === 'down' ? '<span class="down">down</span>' : HW.fnum(c.avgv) + '<span class="faint"> ms</span>') + '</span>' +
+          (c.loss > 0 ? '<span class="num ' + (RANK[c.st] >= 3 ? 'bad' : 'warn') + '" title="' + (live ? 'loss now' : 'average loss; worst moment ' + HW.fnum(c.max, 0) + '%') + '">' + HW.fnum(c.loss, c.loss < 1 ? 1 : 0) + '%' + (!live && c.max > c.loss ? '<span class="faint"> ↑' + HW.fnum(c.max, 0) + '</span>' : '') + '</span>' : '') + '</span>'; };
+      var vr = { bad: 2, warn: 1, ok: 0 };
+      var cols = [{ key: 'loc', label: 'Location', text: function (x) { return x; }, html: function (x) { return '<b>' + esc(x) + '</b> <span class="xs muted">' + Object.keys(locs[x].hosts).length + ' IP</span>'; } }]
+        .concat(ps.map(function (p) { return { key: 'p:' + p.id, label: p.name, text: function (x) { var c = locs[x].by[p.id]; return c ? HW.fnum(c.avgv) + ' ms ' + HW.fnum(c.loss, 0) + '%' : ''; },
+          sort: function (x) { var c = locs[x].by[p.id]; return c ? (c.loss || 0) * 1000 + (c.avgv || 0) : -1; }, html: function (x) { return cell(locs[x].by[p.id]); } }; }))
+        .concat([{ key: 'verdict', label: 'Verdict', text: function (x) { return verdict(locs[x])[1]; }, sort: function (x) { return vr[verdict(locs[x])[0]]; }, html: function (x) { var v = verdict(locs[x]); return '<span class="pill ' + v[0] + '">' + esc(v[1]) + '</span>'; } },
+          { key: 'more', label: 'More', text: function () { return ''; }, html: function (x) { return '<button class="btn-xs btn-g btn-i" data-loc="' + esc(x) + '">' + I('more') + '</button>'; } }]);
+      var mxKey = 'hub-ov-' + ps.map(function (p) { return p.id; }).join('-');
+      if (!S.mx || S.mx.key !== mxKey) S.mx = { key: mxKey, t: HW.table($('mx'), { id: mxKey, rows: rows, columns: cols, empty: 'No locations match.' }) };
+      else { S.mx.t = HW.table($('mx'), { id: mxKey, rows: rows, columns: cols, empty: 'No locations match.' }); }
       [].forEach.call($('mx').querySelectorAll('[data-loc]'), function (b) { b.onclick = function () { var x = b.dataset.loc, hs = Object.keys(locs[x].hosts);
         HW.menu(b, [{ label: 'Compare sites on a chart', icon: 'chart', onClick: function () { location.hash = '#/compare?loc=' + encodeURIComponent(x); } },
           { label: 'MTR from all sites', icon: 'play', onClick: function () { mtrDialog(hs); } },
@@ -225,7 +237,7 @@
         '<label class="row gap4 small"><input type="checkbox" id="tuJ"' + (th.uJ ? ' checked' : '') + '>jitter &gt;<input type="number" id="tJ" value="' + th.J + '" style="width:70px">ms</label>' +
         '<label class="row gap4 small"><input type="checkbox" id="tuD"' + (th.uD ? ' checked' : '') + '>delay &gt; normal +<input type="number" id="tD" value="' + th.D + '" style="width:70px">ms</label><label class="row gap4 small">lasting at least<input type="number" id="tDur" min="0" value="' + (f.dur || 0) + '" style="width:70px">s</label><span class="grow"></span><span class="xs muted" id="iRes"></span></div></div></div>' +
         '<div class="card"><div class="hd"><h2>Timeline</h2><span class="sub">IPs over the limits per moment: red = several sites, amber = one site\u2019s path, purple = one site\u2019s own link</span></div><div class="bd"><div id="iTl"></div></div></div>' +
-        '<div class="card"><div class="hd"><h2 id="iN">Incidents</h2><span class="grow"></span><button class="btn-s" id="iEv">' + I('box') + 'Evidence for this window</button></div><div class="bd"><div class="tw" id="iT"></div></div></div>';
+        '<div class="card"><div class="hd"><h2 id="iN">Incidents</h2><span class="grow"></span><button class="btn-s" id="iEv">' + I('box') + 'Evidence for this window</button></div><div class="bd"><div id="iT"></div></div></div>';
       var rp = HW.rangePicker($('iR'), RANGES, qs('from') ? { from: +qs('from'), to: +qs('to') } : { range: f.range }, function (w) { if (w.range) f.range = w.range; HW.ls('hinc', f); load(); });
       HW.ms($('iP'), { options: probeOpts(l), value: f.probes, label: 'Sites', onChange: function (v) { f.probes = v; HW.ls('hinc', f); load(); } });
       var locs = {}; targetOpts(l).forEach(function (t) { locs[t.group] = 1; });
@@ -234,7 +246,7 @@
       HW.ms($('iS'), { options: Object.keys(SIG).map(function (k) { return { value: k, label: SIG[k] }; }), value: f.sig, label: 'Signal', onChange: function (v) { f.sig = v; HW.ls('hinc', f); draw(); } });
       ['tMin', 'tuL', 'tL', 'tuJ', 'tJ', 'tuD', 'tD'].forEach(function (id) { $(id).addEventListener('change', function () {
         th = { min: +$('tMin').value, uL: $('tuL').checked, L: +$('tL').value, uJ: $('tuJ').checked, J: +$('tJ').value, uD: $('tuD').checked, D: +$('tD').value }; HW.ls('hth', th); load(); }); });
-      var last = null;
+      var last = null, tbl = null;
       $('tDur').oninput = function () { f.dur = +this.value || 0; HW.ls('hinc', f); draw(); };
       $('iEv').onclick = function () { var w = rp.get(); location.hash = '#/evidence?from=' + Math.floor(w.from) + '&to=' + Math.ceil(w.to); };
       function draw() {
@@ -242,13 +254,18 @@
         var list = last.incidents.filter(function (i) { return (i.t1 - i.t0 >= (f.dur || 0)) && (!f.kinds.length || f.kinds.indexOf(i.kind) >= 0) && (!f.locs.length || f.locs.indexOf(i.location) >= 0) && (!f.sig.length || f.sig.indexOf(i.signal) >= 0); });
         $('iN').textContent = list.length + ' incidents';
         var names = last.probes.map(function (p) { return p.name; });
-        $('iT').innerHTML = list.length ? '<table class="table"><thead><tr><th>Started</th><th>Duration</th><th>Kind</th><th>Location</th><th>Target</th><th>Signal</th>' + names.map(function (n) { return '<th class="r">' + esc(n) + '</th>'; }).join('') + '<th class="w0"></th></tr></thead><tbody>' +
-          list.slice(0, 500).map(function (i, k) { var u = i.signal === 'loss' ? '%' : 'ms';
-            return '<tr><td class="w0">' + HW.fdt(i.t0) + '</td><td>' + HW.fdur(i.t1 - i.t0) + '</td><td><span class="pill ' + KIND[i.kind][1] + '" title="' + esc(KIND[i.kind][2]) + '">' + KIND[i.kind][0] + '</span></td>' +
-              '<td>' + esc(i.location) + '</td><td class="mono small">' + esc(i.host) + '</td><td>' + i.signal + '</td>' +
-              names.map(function (n) { var v = i.worst[n]; return '<td class="r num ' + (v != null ? (i.kind === 'target' ? 'bad' : 'warn') : 'faint') + '">' + (v != null ? HW.fnum(v) + ' ' + u : '–') + '</td>'; }).join('') +
-              '<td class="w0"><button class="btn-xs btn-g btn-i" data-i="' + k + '">' + I('more') + '</button></td></tr>'; }).join('') + '</tbody></table>' : '<div class="empty">Nothing over the limits in this window.</div>';
-        [].forEach.call($('iT').querySelectorAll('[data-i]'), function (b) { b.onclick = function () { var i = list[+b.dataset.i], pad = Math.max(600, (i.t1 - i.t0));
+        var cols = [
+          { key: 't0', label: 'Started', nowrap: true, text: function (i) { return HW.fdt(i.t0); }, sort: function (i) { return i.t0; } },
+          { key: 'dur', label: 'Duration', text: function (i) { return HW.fdur(i.t1 - i.t0); }, sort: function (i) { return i.t1 - i.t0; } },
+          { key: 'kind', label: 'Kind', text: function (i) { return KIND[i.kind][0]; }, html: function (i) { return '<span class="pill ' + KIND[i.kind][1] + '" title="' + esc(KIND[i.kind][2]) + '">' + KIND[i.kind][0] + '</span>'; } },
+          { key: 'location', label: 'Location' },
+          { key: 'host', label: 'Target', html: function (i) { return '<span class="mono small">' + esc(i.host) + '</span>'; } },
+          { key: 'signal', label: 'Signal' }].concat(names.map(function (n) { return { key: 'site:' + n, label: n, align: 'r',
+            text: function (i) { return i.worst[n] == null ? '' : HW.fnum(i.worst[n]) + (i.signal === 'loss' ? ' %' : ' ms'); }, sort: function (i) { return i.worst[n] == null ? -1 : i.worst[n]; },
+            html: function (i) { var v = i.worst[n]; return '<span class="num ' + (v != null ? (i.kind === 'target' ? 'bad' : 'warn') : 'faint') + '">' + (v != null ? HW.fnum(v) + (i.signal === 'loss' ? ' %' : ' ms') : '–') + '</span>'; } }; }))
+          .concat([{ key: 'act', label: 'More', text: function () { return ''; }, html: function (i) { return '<button class="btn-xs btn-g btn-i" data-inc="' + list.indexOf(i) + '">' + I('more') + '</button>'; } }]);
+        if (tbl) tbl.render(list.slice(0, 1000)); else tbl = HW.table($('iT'), { id: 'hub-inc-' + names.length, rows: list.slice(0, 1000), columns: cols, empty: 'Nothing over the limits in this window.' });
+        [].forEach.call($('iT').querySelectorAll('[data-inc]'), function (b) { b.onclick = function () { var i = list[+b.dataset.inc], pad = Math.max(600, (i.t1 - i.t0));
           HW.menu(b, [{ label: 'Compare sites around this', icon: 'chart', onClick: function () { location.hash = '#/compare?host=' + encodeURIComponent(i.host) + '&from=' + Math.floor(i.t0 - pad) + '&to=' + Math.ceil(Math.min(Date.now() / 1000, i.t1 + pad)); } },
             { label: 'MTR runs around this', icon: 'route', onClick: function () { location.hash = '#/mtr?host=' + encodeURIComponent(i.host) + '&from=' + Math.floor(i.t0 - 1800) + '&to=' + Math.ceil(i.t1 + 1800); } },
             { label: 'MTR from all sites now', icon: 'play', onClick: function () { mtrDialog([i.host]); } },
@@ -318,25 +335,37 @@
     $('runBtn').onclick = function () { mtrDialog([]); };
     var f = HW.lsj('hmtr', { range: 604800, hosts: [], probes: [], trig: [] });
     if (qs('host')) f.hosts = [qs('host')];
-    live().then(function (l) {
+    (function () {
       $('main').innerHTML = '<div class="card"><div class="bd row gap12"><span id="rR"></span><div id="rH"></div><div id="rP"></div><div id="rT"></div></div></div>' +
-        '<div class="card"><div class="hd"><h2 id="rN">Runs</h2><span class="sub" id="rB"></span></div><div class="bd"><div class="tw" id="rL"></div></div></div>';
+        '<div class="card"><div class="hd"><h2 id="rN">Runs</h2><span class="sub" id="rB"></span></div><div class="bd"><div id="rL"></div></div></div>';
       var rp = HW.rangePicker($('rR'), [[86400, '24h'], [604800, '7d'], [2592000, '30d']], qs('from') ? { from: +qs('from'), to: +qs('to') } : { range: f.range }, function (w) { if (w.range) f.range = w.range; HW.ls('hmtr', f); load(); });
-      HW.ms($('rH'), { options: targetOpts(l), value: f.hosts, label: 'Targets', onChange: function (v) { f.hosts = v; HW.ls('hmtr', f); load(); } });
-      HW.ms($('rP'), { options: probeOpts(l), value: f.probes, label: 'Sites', onChange: function (v) { f.probes = v; HW.ls('hmtr', f); load(); } });
+      // the list does not wait for the live status; the pickers fill in when it arrives
+      var mH = HW.ms($('rH'), { options: f.hosts.map(function (h) { return { value: h, label: h }; }), value: f.hosts, label: 'Targets', onChange: function (v) { f.hosts = v; HW.ls('hmtr', f); load(); } });
+      var mP = HW.ms($('rP'), { options: [], value: f.probes, label: 'Sites', onChange: function (v) { f.probes = v; HW.ls('hmtr', f); load(); } });
+      live().then(function (l) { mH.options(targetOpts(l)); mH.set(f.hosts, true); mP.options(probeOpts(l)); mP.set(f.probes, true); });
       HW.ms($('rT'), { options: Object.keys(TRIG).map(function (k) { return { value: k, label: TRIG[k][0] }; }), value: f.trig, label: 'Trigger', onChange: function (v) { f.trig = v; HW.ls('hmtr', f); load(); } });
+      var tbl = null;
       function load() {
         var w = rp.get();
         api('/api/mtr?limit=500&from=' + Math.floor(w.from) + '&to=' + Math.ceil(w.to) + (f.hosts.length ? '&host=' + encodeURIComponent(f.hosts.join(',')) : '') + (f.probes.length ? '&probe=' + f.probes.join(',') : '') + (f.trig.length ? '&trig=' + f.trig.join(',') : '')).then(function (r) {
           $('rN').textContent = r.runs.length + ' runs';
           $('rB').textContent = Object.keys(r.errors).length ? 'not answering: ' + Object.keys(r.errors).join(', ') : '';
-          $('rL').innerHTML = r.runs.length ? '<table class="table"><thead><tr><th>Started</th><th>Site</th><th>Location</th><th>Target</th><th>Mode</th><th>Trigger</th><th>Status</th><th style="min-width:140px">Loss at target</th><th class="r">Hops</th></tr></thead><tbody>' +
-            r.runs.map(function (x) { return '<tr class="click" data-p="' + esc(x.probe) + '" data-id="' + x.id + '"><td class="w0">' + HW.fdt(x.started || x.created) + '</td><td><b>' + esc(x.probe_name) + '</b></td><td>' + esc(x.location) + '</td><td class="mono small">' + esc(x.host) + '</td><td>' + modeName(x) + '</td><td>' + trigPill(x) + (x.reason ? ' <span class="xs muted">' + esc(x.reason) + '</span>' : '') + '</td><td>' + statusPill(x) + '</td><td>' + lossCell(x.dst_loss) + '</td><td class="r">' + (x.hops || '') + '</td></tr>'; }).join('') + '</tbody></table>' : '<div class="empty">No runs in this window.</div>';
-          [].forEach.call($('rL').querySelectorAll('tr.click'), function (tr) { tr.onclick = function () { location.hash = '#/run?probe=' + tr.dataset.p + '&id=' + tr.dataset.id; }; });
+          var cols = [
+            { key: 'started', label: 'Started', nowrap: true, text: function (x) { return HW.fdt(x.started || x.created); }, sort: function (x) { return x.started || x.created; } },
+            { key: 'probe_name', label: 'Site', html: function (x) { return '<b>' + esc(x.probe_name) + '</b>'; } },
+            { key: 'location', label: 'Location' },
+            { key: 'host', label: 'Target', html: function (x) { return '<span class="mono small">' + esc(x.host) + '</span>'; } },
+            { key: 'mode', label: 'Mode', text: modeName },
+            { key: 'trig', label: 'Trigger', text: function (x) { return (TRIG[x.trig] || [x.trig])[0] + (x.reason ? ' ' + x.reason : ''); }, html: function (x) { return trigPill(x) + (x.reason ? ' <span class="xs muted">' + esc(x.reason) + '</span>' : ''); } },
+            { key: 'status', label: 'Status', html: function (x) { return x.status === 'running' || x.status === 'queued' ? HW.mtrProgress(x, 1) : statusPill(x); } },
+            { key: 'dst_loss', label: 'Loss at target', minw: 140, text: function (x) { return x.dst_loss == null ? '' : x.dst_loss + '%'; }, sort: function (x) { return x.dst_loss == null ? -1 : x.dst_loss; }, html: function (x) { return lossCell(x.dst_loss); } },
+            { key: 'hops', label: 'Hops', align: 'r', sort: function (x) { return x.hops || 0; } }];
+          if (tbl) tbl.render(r.runs); else tbl = HW.table($('rL'), { id: 'hub-mtr', rows: r.runs, columns: cols, empty: 'No runs in this window.',
+            onRow: function (x) { location.hash = '#/run?probe=' + x.probe + '&id=' + x.id; } });
         }).catch(fail);
       }
       load(); S.timers.push(setInterval(load, 10000));
-    }).catch(fail);
+    })();
   }
   function hopTable(hubs, other) {
     var mx = Math.max.apply(null, hubs.map(function (h) { return h.Wrst || 0; }).concat([1])), oip = other ? other.map(function (h) { return HW.hopIp(h.host); }) : null;
@@ -357,6 +386,7 @@
         var cmpHubs = cmp && cmp.result ? cmp.result.report.hubs : null;
         $('main').innerHTML = '<div class="kpis">' + kpi('server', 'Site', esc(r.probe_name), '') + kpi('info', 'Status', statusPill(r), r.error ? esc(r.error) : '') +
           kpi('alert', 'Loss at target', r.dst_loss == null ? '–' : HW.fnum(r.dst_loss) + '%', (hubs.length || '') + ' hops') + kpi('clock', 'Trigger', trigPill(r), esc(r.reason || '')) + '</div>' +
+          (r.status === 'running' || r.status === 'queued' ? '<div class="card"><div class="bd"><b>' + (r.status === 'queued' ? 'Waiting for a free slot on ' + esc(r.probe_name) + '…' : 'Tracing from ' + esc(r.probe_name) + '…') + '</b><div class="mt8">' + HW.mtrProgress(r, 1) + '</div></div></div>' : '') +
           (v ? '<div class="banner ' + (v.level === 'ok' ? 'info' : v.level) + '">' + I(v.level === 'ok' ? 'check' : 'alert') + esc(v.text) + '</div>' : '') +
           '<div class="card"><div class="hd"><h2>Same target from other sites</h2><span class="sub">runs within 30 minutes · pick one to put it next to this one</span></div><div class="bd">' +
           (others && others.length ? '<div class="row gap4">' + others.map(function (o, k) { return '<button class="btn-s' + (cmp && cmp.id === o.id && cmp.probe === o.probe ? ' btn-p' : '') + '" data-o="' + k + '">' + esc(o.probe_name) + ' · ' + HW.fdt(o.started || o.created) + ' · ' + modeName(o) + ' · ' + (o.dst_loss == null ? '' : HW.fnum(o.dst_loss) + '% loss') + '</button>'; }).join('') + '</div>'
@@ -408,7 +438,7 @@
           (cfg.probes.length ? '<div class="tw"><table class="table"><thead><tr><th>On</th><th>Name</th><th>Address</th><th>Token</th><th>Now</th><th class="w0"></th></tr></thead><tbody>' + cfg.probes.map(function (p, i) { var x = lv[p.id];
             return '<tr><td class="w0"><label class="switch"><input type="checkbox" data-on="' + i + '"' + (p.enabled ? ' checked' : '') + (p.local ? ' disabled' : '') + '></label></td><td><b>' + esc(p.name) + '</b>' + (p.local ? ' <span class="pill info">this container</span>' : '') + '</td><td class="mono small">' + esc(p.url) + '</td><td>' + (p.token_set ? '<span class="pill ok">set</span>' : '<span class="pill bad">missing</span>') + '</td>' +
               '<td>' + (!p.enabled ? '<span class="faint">off</span>' : !x ? '<span class="faint">…</span>' : x.error && !x.targets ? '<span class="small bad">' + esc(x.error) + '</span>' : '<span class="pill ok">' + x.targets.length + ' targets</span> <span class="xs muted">v' + esc(x.version) + '</span>') + '</td>' +
-              '<td class="w0">' + (p.local ? '<span class="xs muted">built in</span>' : '<button class="btn-xs btn-g btn-i" data-ed="' + i + '">' + I('edit') + '</button><button class="btn-xs btn-g btn-i" data-rm="' + i + '">' + I('trash') + '</button>') + '</td></tr>'; }).join('') + '</tbody></table></div>'
+              '<td class="w0"><button class="btn-xs btn-g btn-i" data-ed="' + i + '" title="Rename / edit">' + I('edit') + '</button>' + (p.local ? '' : '<button class="btn-xs btn-g btn-i" data-rm="' + i + '">' + I('trash') + '</button>') + '</td></tr>'; }).join('') + '</tbody></table></div>'
             : '<div class="empty">No probes yet.</div>') +
           '<details class="help mt12"><summary>' + I('info') + 'How to connect a probe</summary><div><div class="steps"><div><span>Open the probe, <b>Settings → Security → API tokens</b>, create a token called <i>hub</i>.</span></div><div><span>Here, <b>Add probe</b>: name it after the site, paste the probe address and the token, <b>Test</b>, <b>Save</b>.</span></div><div><span>The hub must reach the probe on its port (VPN or LAN). The probe never needs to reach the hub.</span></div></div></div></details></div></div>';
         $('pAdd').onclick = function () { probeDialog(cfg, null, save); };
@@ -438,6 +468,13 @@
   }
   function probeDialog(cfg, i, save) {
     var p = i == null ? { name: '', url: 'http://', token: '', enabled: true } : JSON.parse(JSON.stringify(cfg.probes[i]));
+    if (p.local) {      // the probe in this container: only its name can change here
+      HW.modal('Rename probe', '<div class="field"><label>Name</label><input id="pn" value="' + esc(p.name) + '"><span class="hint">Shown in every table, chart and evidence pack of this hub. Empty = the probe’s own site name.</span></div>',
+        '<button class="btn-g" id="px">Cancel</button><button class="btn-p" id="pok">Save</button>');
+      $('px').onclick = HW.closeModal;
+      $('pok').onclick = function () { cfg.probes[i] = Object.assign({}, p, { name: $('pn').value.trim() }); HW.closeModal(); save(cfg); };
+      return;
+    }
     HW.modal(i == null ? 'Add probe' : 'Edit probe', '<div class="col gap12"><div class="field"><label>Name</label><input id="pn" value="' + esc(p.name) + '" placeholder="e.g. Home, Office, DC Frankfurt"><span class="hint">Shown in every table and chart</span></div>' +
       '<div class="field"><label>Address</label><input id="pu" value="' + esc(p.url) + '" placeholder="http://192.0.2.10:8095"></div>' +
       '<div class="field"><label>API token</label><input id="pt" type="password" placeholder="' + (p.token_set ? 'stored – leave empty to keep it' : 'hw_…') + '"><span class="hint">From the probe: Settings → Security → API tokens</span></div>' +

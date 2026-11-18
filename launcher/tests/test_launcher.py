@@ -60,7 +60,9 @@ class LauncherTest(unittest.TestCase):
             self.assertTrue(local[0].get("site"), local[0])
             self.assertNotIn("cannot reach", str(local[0].get("error")))
             self.assertEqual(len(local[0]["targets"]), 2)          # the probe's default targets
-            self.assertNotIn("local", open(os.path.join(data, "hub", "config.json")).read())
+            stored = json.load(open(os.path.join(data, "hub", "config.json")))
+            self.assertEqual(stored["probes"], [])                  # the built-in probe is never stored
+            self.assertNotIn("token", json.dumps(stored["probes"]))
             r = subprocess.run([sys.executable, os.path.join(app, "run.py"), "--health"], env=env, capture_output=True)
             self.assertEqual(r.returncode, 0, r.stdout)
         finally:

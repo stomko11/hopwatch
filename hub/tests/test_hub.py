@@ -84,6 +84,26 @@ class ConfigTest(unittest.TestCase):
         self.assertNotIn("hw_secret", str(c.public()))
         self.assertTrue(c.public()["probes"][0]["token_set"])
 
+    def test_rename_local_probe(self):
+        d = tempfile.mkdtemp()
+        with open(os.path.join(d, "probe.json"), "w") as f:
+            f.write('{"site_name": "Home"}')
+        os.environ.update({"HOPWATCH_LOCAL_PROBE_URL": "http://127.0.0.1:1", "HOPWATCH_LOCAL_TOKEN": "x" * 40,
+                           "HOPWATCH_LOCAL_PROBE_CONFIG": os.path.join(d, "probe.json")})
+        try:
+            c = config.Config(os.path.join(d, "c.json"))
+            self.assertEqual(c.probes()[0]["name"], "Home")
+            pub = c.public()
+            c.update(pub)                                   # saving other settings keeps following the site name
+            self.assertEqual(c.get()["local_name"], "")
+            pub["probes"][0]["name"] = "Home office"
+            c.update(pub)
+            self.assertEqual(c.probes()[0]["name"], "Home office")
+            self.assertEqual(c.get()["probes"], [])          # never stored as a normal probe
+        finally:
+            for k in ("HOPWATCH_LOCAL_PROBE_URL", "HOPWATCH_LOCAL_TOKEN", "HOPWATCH_LOCAL_PROBE_CONFIG"):
+                os.environ.pop(k, None)
+
     def test_bad_url(self):
         with self.assertRaises(config.ConfigError):
             config.validate({"probes": [{"name": "x", "url": "file:///etc/passwd"}]})

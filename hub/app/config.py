@@ -6,11 +6,12 @@ import re
 import secrets
 import threading
 
-VERSION = "0.2.1"
+VERSION = "0.2.2"
 
 DEFAULTS = {
     "name": "Hopwatch Hub",
     "probes": [],            # [{"id", "name", "url", "token", "enabled"}]
+    "local_name": "",        # name for the probe in the same container (empty = its own site name)
     "correlate": {"min_sites": 2, "loss": 1.0, "jitter": 10.0, "delay": 50.0,
                   "use_loss": True, "use_jitter": False, "use_delay": False, "site_share": 50},
     "security": {"password_hash": "", "view_requires_login": False, "cors_origins": "", "tokens": []},
@@ -34,6 +35,7 @@ def _merge(base, over):
 def validate(cfg: dict) -> dict:
     c = _merge(DEFAULTS, cfg)
     c["name"] = str(c.get("name") or "Hopwatch Hub").strip()[:60]
+    c["local_name"] = str(c.get("local_name") or "").strip()[:40]
     k = c["correlate"]
     try:
         k["min_sites"] = int(k["min_sites"])
@@ -86,18 +88,21 @@ class Config:
             return copy.deepcopy(self.data)
 
     @staticmethod
-    def local_probe():
+    def _local_site_name():
+        try:
+            with open(os.environ.get("HOPWATCH_LOCAL_PROBE_CONFIG", "")) as f:
+                return (json.load(f).get("site_name") or "").strip()[:40]
+        except (OSError, ValueError):
+            return ""
+
+    def local_probe(self):
         """The probe in the same container (set up by the launcher), or None. Not stored, not editable."""
         url, tok = os.environ.get("HOPWATCH_LOCAL_PROBE_URL"), os.environ.get("HOPWATCH_LOCAL_TOKEN")
         if not url or not tok:
             return None
-        name = "This site"
-        try:
-            with open(os.environ.get("HOPWATCH_LOCAL_PROBE_CONFIG", "")) as f:
-                name = (json.load(f).get("site_name") or "").strip() or name
-        except (OSError, ValueError):
-            pass
-        return {"id": "local", "name": name[:40], "url": url, "token": tok, "enabled": True, "local": True}
+        own = (self.get().get("local_name") or "").strip()
+        name = self._local_site_name() or "This site"
+        return {"id": "local", "name": (own or name)[:40], "url": url, "token": tok, "enabled": True, "local": True}
 
     def probes(self):
         lp = self.local_probe()
@@ -115,6 +120,10 @@ class Config:
         with self.lock:
             cur = copy.deepcopy(self.data)
             new = dict(new)
+            loc = next((p for p in (new.get("probes") or []) if p.get("local") or p.get("id") == "local"), None)
+            if loc is not None:      # renaming the built-in probe is stored as local_name (only if it differs)
+                nm = str(loc.get("name") or "").strip()
+                new["local_name"] = "" if nm in ("", self._local_site_name(), "This site") else nm
             new["probes"] = [p for p in (new.get("probes") or []) if not p.get("local") and p.get("id") != "local"]
             new["security"] = {**cur["security"], **{k: v for k, v in (new.get("security") or {}).items()
                                                     if k in ("view_requires_login", "cors_origins")}}

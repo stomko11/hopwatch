@@ -129,31 +129,48 @@ def api_overview(h, q, _):
     names = {p["id"]: p["name"] for p in ps}
     data = {pid: d for pid, d in res.items() if "error" not in d}
     k = c["correlate"]
-    corr = hub.correlate(data, names, _th({}, c), min(k["min_sites"], max(1, len(data))), k["site_share"] / 100)
+    corr_b = hub.correlate(data, names, _th({}, c), min(k["min_sites"], max(1, len(data))), k["site_share"] / 100)
     step, grid, locs = hub.align(data)
     normal = {hst: {p: hub._median([v[0] for v in grid[hst].get(p, {}).values()]) for p in data} for hst in grid}
+    K = min(k["min_sites"], max(1, len(data)))
+    th = {"loss": k["loss"], "delay": k["delay"], "jitter": k["jitter"]}
+    # per location and moment: the amount at least K sites saw at the same time (the K-th highest value
+    # among the sites over the limit), worst IP of the location; 0 when fewer sites saw it
+    corr = {"loss": {}, "delay": {}, "jitter": {}}
+    for hst, by in grid.items():
+        loc = locs[hst]
+        ts = {t for p in by for t in by[p]}
+        for t in ts:
+            vals = {"loss": [], "delay": [], "jitter": []}
+            for p in data:
+                v = by.get(p, {}).get(t)
+                if not v:
+                    continue
+                avg, loss, jit = v
+                if loss is not None and loss > th["loss"]:
+                    vals["loss"].append(loss)
+                if jit is not None and jit > th["jitter"]:
+                    vals["jitter"].append(jit)
+                base = normal[hst].get(p)
+                if avg is not None and base is not None and avg - base > th["delay"]:
+                    vals["delay"].append(avg - base)
+            for sig, vs in vals.items():
+                vs.sort(reverse=True)
+                amount = vs[K - 1] if len(vs) >= K else 0.0
+                d = corr[sig].setdefault(loc, {})
+                d[t] = max(d.get(t, 0.0), amount)
+    grid_t = sorted({t for hst in grid for p in grid[hst] for t in grid[hst][p]})
     lines = {}
-    for p in data:
-        acc = {}
-        for hst, by in grid.items():
-            base = normal[hst].get(p)
-            for t, (avg, loss, jit) in by.get(p, {}).items():
-                a = acc.setdefault(t, [0.0, 0, 0.0, 0, 0.0, 0])
-                if loss is not None:
-                    a[0] += loss
-                    a[1] += 1
-                if avg is not None and base is not None:
-                    a[2] += max(0.0, avg - base)
-                    a[3] += 1
-                if jit is not None:
-                    a[4] += jit
-                    a[5] += 1
-        ts = sorted(acc)
-        lines[p] = {"t": ts, "loss": [round(acc[t][0] / acc[t][1], 2) if acc[t][1] else None for t in ts],
-                    "excess": [round(acc[t][2] / acc[t][3], 2) if acc[t][3] else None for t in ts],
-                    "jitter": [round(acc[t][4] / acc[t][5], 2) if acc[t][5] else None for t in ts]}
+    for sig, per in corr.items():
+        out = []
+        for loc, pts in per.items():
+            peak = max(pts.values() or [0])
+            if peak > 0:
+                out.append({"name": loc, "peak": round(peak, 2), "t": grid_t, "v": [round(pts[t], 2) if t in pts else None for t in grid_t]})
+        out.sort(key=lambda x: -x["peak"])
+        lines[sig] = out[:20]
     verdict = {}
-    for i in corr["incidents"]:
+    for i in corr_b["incidents"]:
         v = verdict.setdefault(i["location"], {"target": set(), "one": set()})
         (v["target"] if i["kind"] == "target" else v["one"]).update(i["site_names"])
     rows = {}
@@ -182,7 +199,7 @@ def api_overview(h, q, _):
         out_rows.append({"location": loc, "hosts": sorted(r["hosts"]), "by": by,
                          "several": sorted(v["target"]), "one": sorted(v["one"] - v["target"])})
     return {"from": t0, "to": t1, "step": step, "probes": [{"id": p["id"], "name": p["name"]} for p in ps],
-            "lines": lines, "simultaneous": corr["buckets"], "locations": out_rows,
+            "lines": lines, "min_sites": K, "thresholds": th, "simultaneous": corr_b["buckets"], "locations": out_rows,
             "errors": {names[pid]: d["error"] for pid, d in res.items() if "error" in d}}
 
 

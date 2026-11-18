@@ -217,7 +217,7 @@ details.help>summary::-webkit-details-marker{display:none} details.help>div{padd
 .steps{counter-reset:s;display:grid;gap:10px;margin:8px 0} .steps>div{display:grid;grid-template-columns:28px 1fr;gap:10px;align-items:start}
 .steps>div:before{counter-increment:s;content:counter(s);width:24px;height:24px;border-radius:50%;background:var(--accent-soft);color:var(--accent);font-weight:700;font-size:12px;display:flex;align-items:center;justify-content:center}
 @media (max-width:640px){.tiles{grid-template-columns:1fr} .ipr{grid-template-columns:minmax(118px,auto) minmax(30px,1fr) 58px 38px 26px} .ipr .jit{display:none}
-  .ms{min-width:0;flex:1 1 160px} .range{max-width:100%}}
+  .row>.ms{min-width:0;flex:1 1 160px} .modal .ms{flex:none} .range{max-width:100%}}
 
 /* ---- overview charts grid ---- */
 .cgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
@@ -226,3 +226,23 @@ details.help>summary::-webkit-details-marker{display:none} details.help>div{padd
 .prefs{width:260px}
 .prefs .row{justify-content:space-between}
 .modal .ms{display:flex;width:100%}
+
+/* ---- tables: sortable headers, cards on narrow screens ---- */
+.table th.srt{cursor:pointer;user-select:none} .table th.srt:hover{color:var(--text)}
+.tcards{display:grid;gap:8px}
+.tcard{position:relative;border:1px solid var(--border);border-radius:var(--r2);background:var(--surface2);padding:10px 12px}
+.tcard.click{cursor:pointer} .tcard.sel{border-color:var(--accent);background:var(--accent-soft)}
+.tcard>input[type=checkbox]{position:absolute;top:12px;right:12px}
+.tcard dl{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:0;font-size:13px;align-items:center}
+.tcard dt{color:var(--muted);font-size:11.5px;font-weight:600;text-transform:uppercase;letter-spacing:.03em}
+.tcard dd{margin:0;min-width:0;overflow-wrap:anywhere}
+
+/* ---- dialogs on phones: a sheet from the bottom, compact ---- */
+@media (max-width:640px){
+  .modal{align-items:flex-end;padding:0}
+  .modal .box{width:100%;max-height:88vh;border-radius:16px 16px 0 0}
+  .modal .box>.hd{padding:12px 14px 0} .modal .box>.bd{padding:10px 14px} .modal .box>.ft{padding:0 14px calc(12px + env(safe-area-inset-bottom))}
+  .modal .col.gap12{gap:10px} .modal .field .hint{display:none}
+  .modal .form{grid-template-columns:1fr 1fr;gap:10px}
+  .modal .seg{display:flex;flex-wrap:wrap} .modal .seg button{flex:1 1 auto}
+}
