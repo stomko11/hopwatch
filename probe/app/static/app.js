@@ -44,7 +44,14 @@
     var b = $('banner'); b.className = 'banner';
     b.innerHTML = I('alert') + (net ? 'Cannot reach the probe – check that the container runs.' : e && e.status ? esc(e.message) : 'Something went wrong on this page: ' + esc(e && e.message) + ' – reload the page; if it happens again, please report it.');
   }
+  // unsaved settings are not thrown away by leaving the page or the Settings view without asking
+  window.addEventListener('beforeunload', function (e) { if (S.unsaved) { e.preventDefault(); e.returnValue = ''; } });
   function route() {
+    if (S.unsaved && S.view === 'settings' && !/^#\/?settings/.test(location.hash)) {
+      if (!confirm('Your settings changes are not saved. Leave and lose them?')) { history.replaceState(null, '', S.lastHash || '#/settings'); return; }
+      S.unsaved = false;
+    }
+    S.lastHash = location.hash;
     S.gen++; clearTimers(); HW.closePops(); HW.closeModal(); $('banner').className = S.info && S.info.error ? 'banner' : 'hidden';
     var h = location.hash.replace(/^#\/?/, '').split('?')[0].split('/');
     S.view = h[0] || 'overview'; nav();
@@ -596,11 +603,11 @@
       var tabs = [['targets', 'Targets'], ['monitor', 'General & ping'], ['auto', 'Automatic MTR'], ['mtr', 'MTR & TCP'], ['retention', 'Retention'], ['security', 'Security'], ['import', 'Import']];
       if (!tabs.some(function (t) { return t[0] === tab; })) tab = tabs[0][0];
       $('main').innerHTML = '<div class="tabs" id="stabs">' + tabs.map(function (t) { return '<button data-t="' + t[0] + '" class="' + (t[0] === tab ? 'on' : '') + '">' + t[1] + '</button>'; }).join('') + '</div><div id="sbody" class="col gap12"></div>';
-      var dirty = function () { $('dirty').textContent = 'unsaved changes'; };
+      var dirty = function () { $('dirty').textContent = 'unsaved changes'; S.unsaved = true; };
       $('stabs').onclick = function (e) { var b = e.target.closest('button'); if (!b) return; tab = b.dataset.t; HW.ls('setTab', tab);
         [].forEach.call($('stabs').children, function (x) { x.className = x === b ? 'on' : ''; }); show(); };
-      $('save').onclick = function () {
-        api('/api/config', { method: 'PUT', body: D }).then(function (c) { S.cfg = c; cfg = c; D = JSON.parse(JSON.stringify(c)); $('dirty').textContent = ''; HW.toast('Saved'); loadInfo(); show(); })
+      $('save').onclick = function (msg) { msg = typeof msg === 'string' ? msg : '';
+        api('/api/config', { method: 'PUT', body: D }).then(function (c) { S.cfg = c; cfg = c; D = JSON.parse(JSON.stringify(c)); $('dirty').textContent = ''; S.unsaved = false; HW.toast(msg || 'Saved'); loadInfo(); show(); })
           .catch(function (e) { HW.toast(e.message, true); });
       };
       var get = function (p) { return p.split('.').reduce(function (a, k) { return a == null ? a : a[k]; }, D); };
@@ -672,13 +679,13 @@
               var nw = x.targets.filter(function (t) { return !have[t.host]; }), ch = x.targets.filter(function (t) { var o = have[t.host]; return o && ((o.name || '') !== t.name || o.location !== t.location || (o.role || '') !== t.role); });
               var locs = {}; x.targets.forEach(function (t) { if (t.location) locs[t.location] = 1; });
               $('ndO').innerHTML = 'Found ' + x.targets.length + ' IPs in ' + Object.keys(locs).length + ' locations: ' + nw.length + ' new, ' + ch.length + ' with a different name, location or role. ' +
-                (nw.length || ch.length ? '<button class="btn-s btn-p" id="ndA">Apply</button>' : '') +
+                (nw.length || ch.length ? '<button class="btn-s btn-p" id="ndA">Apply and save</button>' : '') +
                 '<div class="tw mt8" style="max-height:240px"><table class="table"><thead><tr><th>Name</th><th>Location</th><th>Role</th><th>IP</th><th></th></tr></thead><tbody>' + x.targets.map(function (t) {
                   return '<tr><td>' + esc(t.name || '–') + '</td><td>' + esc(t.location || '–') + '</td><td>' + esc(t.role || '–') + '</td><td class="mono small">' + esc(t.host) + '</td><td class="xs muted">' + (!have[t.host] ? 'new' : ch.indexOf(t) >= 0 ? 'changes' : '') + '</td></tr>'; }).join('') + '</tbody></table></div>';
               if ($('ndA')) $('ndA').onclick = function () { var upd = $('ndUp').checked;
                 nw.forEach(function (t) { D.targets.push({ name: t.name, location: t.location, host: t.host, enabled: true, role: t.role }); });
                 if (upd) ch.forEach(function (t) { have[t.host].name = t.name; have[t.host].location = t.location; have[t.host].role = t.role; });
-                dirty(); HW.toast(nw.length + ' added' + (upd ? ', ' + ch.length + ' updated' : '') + ' – press Save'); $('ndO').textContent = 'Applied. Press Save.'; };
+                dirty(); $('save').onclick(nw.length + ' added' + (upd ? ', ' + ch.length + ' updated' : '') + ' – saved'); $('ndO').textContent = 'Applied and saved.'; };
             }).catch(function (e) { $('ndO').textContent = e.message; }); };
           var poll = function () { api('/api/import/history').then(function (j) {
             $('hS').textContent = j.state === 'idle' ? '' : j.state === 'running' ? 'Importing… ' + j.done + ' of ' + (j.total || '?') + ' targets, ' + j.records + ' records' : j.state === 'done' ? 'Done: ' + j.records + ' records for ' + j.total + ' targets.' : 'Failed: ' + (j.error || '');
@@ -750,7 +757,7 @@
         $('tPaste').onclick = function () {
           HW.modal('Paste targets', '<p class="small muted">One per line: <code>Name, Location, IP, Role</code>. Use <code>-</code> or leave it empty for no name or no location. <code>Location, IP, Role</code> and only <code>IP</code> work too, and so do tabs and semicolons. Roles that don\u2019t exist yet are created.</p>' +
             '<textarea id="bulk" placeholder="Cloudflare DNS, -, 1.1.1.1, EXTERNAL&#10;-, AMS, 192.0.2.10, FX&#10;AMS gateway, AMS, 192.0.2.1, ISP&#10;198.51.100.7"></textarea>' +
-            '<div class="mt12">' + HW.sw('bUpd', true, 'Update targets already in the list', 'their name, location and role change to what you paste') + '</div>', '<button class="btn-g" id="bx">Cancel</button><button class="btn-p" id="bo">Apply</button>');
+            '<div class="mt12">' + HW.sw('bUpd', true, 'Update targets already in the list', 'their name, location and role change to what you paste') + '</div>', '<button class="btn-g" id="bx">Cancel</button><button class="btn-p" id="bo">Apply and save</button>');
           $('bx').onclick = HW.closeModal;
           $('bo').onclick = function () {
             var add = 0, upd = 0, upd_on = $('bUpd').checked, have = {}; D.targets.forEach(function (t) { have[t.host] = t; });
@@ -764,7 +771,7 @@
               if (role) role = D.roles.filter(function (r) { return r.name.toLowerCase() === role.toLowerCase(); })[0].name;
               if (have[host]) { if (upd_on && p.length > 1) { if (before.length >= 2) have[host].name = name; if (before.length) have[host].location = loc; if (p.length > hi + 1) have[host].role = role; upd++; } }
               else { var t = { name: name, location: loc, host: host, enabled: true, role: role }; D.targets.push(t); have[host] = t; add++; } });
-            HW.closeModal(); dirty(); draw(); drawRoles(); HW.toast(add + ' added, ' + upd + ' updated – press Save'); };
+            HW.closeModal(); dirty(); draw(); drawRoles(); $('save').onclick(add + ' added, ' + upd + ' updated – saved'); };
         };
         draw(); drawRoles();
       }

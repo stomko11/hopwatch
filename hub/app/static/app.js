@@ -126,7 +126,7 @@
     head('Overview', 'What the sites see – together or each on its own', '<button class="btn-p" id="runBtn">' + I('play') + '<span>MTR from all sites</span></button>');
     $('runBtn').onclick = function () { mtrDialog([]); };
     var f = HW.lsj('hovf', { q: '', only: 'bad', locs: [] });
-    if (f.only !== 'all') f.only = 'bad';
+    if (!f.v29) { f.only = 'bad'; f.v29 = 1; HW.ls('hovf', f); }     // the old default "All" listed every location; start from the chart once
     f.view = f.view || 'common'; f.sig = f.sig || 'loss';
     var locMs = null, ov = null, hidden = {}, pin = null;
     $('main').innerHTML = '<div class="card"><div class="bd row gap12"><span id="ovR"></span><span class="grow"></span><span class="xs muted" id="ovUpd"></span></div></div>' +
