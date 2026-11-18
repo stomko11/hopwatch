@@ -43,38 +43,48 @@ Everything is configured in the web UI. MTR only runs to targets in your list.
 The probes keep their own history; the hub reads it over their API with a token per probe, so nothing
 is stored twice. The hub has to reach the probes (LAN or VPN); the probes never need to reach the hub.
 
+## One image, two apps
+
+Both apps are in one image, `ghcr.io/stomko11/hopwatch`. Variables choose what runs:
+
+| Variable | Default | |
+|---|---|---|
+| `HOPWATCH_PROBE` | `true` | run the probe |
+| `HOPWATCH_PROBE_PORT` | `8095` | probe web UI port |
+| `HOPWATCH_HUB` | `false` | run the hub |
+| `HOPWATCH_HUB_PORT` | `8090` | hub web UI port |
+| `HOPWATCH_DATA` | `/data` | probe data here, hub data in `/data/hub` |
+| `HOPWATCH_BIND` | all | address to listen on |
+| `HOPWATCH_RESET_PASSWORD` | `false` | `true` removes the admin passwords at start |
+| `HOPWATCH_LOG` | `INFO` | log level |
+
+Typical setup: one server runs probe **and** hub, every other site runs only the probe. With both on
+in one container, the hub shows the local probe by itself (a token made fresh at every start is
+shared between the two and never stored). Other probes are added in the hub with their address and an
+API token created on that probe (**Settings → Security**).
+
 ## Install on Unraid
 
 1. Docker → **Add Container** → **Template repositories**: add `https://github.com/stomko11/hopwatch`,
-   then pick `hopwatch-probe` or `hopwatch-hub`. Or copy the XML from `unraid/` to
+   then pick `hopwatch`. Or copy `unraid/hopwatch.xml` to
    `/boot/config/plugins/dockerMan/templates-user/` and pick it under **Template**.
-2. **Probe:** keep **Network type: Host**, so MTR shows your real first hop instead of the Docker
-   bridge. Open `http://<server>:8095`, set the admin password, add targets in **Settings** (or import
-   them from Netdata).
-3. **Hub:** open `http://<server>:8090`, set its password. On each probe create an API token
-   (**Settings → Security**), then add the probe in the hub (**Settings → Probes → Add probe**).
+2. Keep **Network type: Host**, so MTR shows your real first hop instead of the Docker bridge.
+3. Set **Run the hub** to `true` on the server that should show all sites.
+4. Open `http://<server>:8095` (probe) and `http://<server>:8090` (hub), set the admin passwords, add
+   targets in the probe's **Settings** (or import them from Netdata) and the other sites in the hub's
+   **Settings → Probes**.
 
 ## Run with Docker
 
 ```sh
-docker run -d --name hopwatch-probe --network host --cap-add NET_RAW \
-  -v /srv/hopwatch-probe:/data --restart unless-stopped ghcr.io/stomko11/hopwatch-probe:latest
+# probe only
+docker run -d --name hopwatch --network host --cap-add NET_RAW \
+  -v /srv/hopwatch:/data --restart unless-stopped ghcr.io/stomko11/hopwatch:latest
 
-docker run -d --name hopwatch-hub -p 8090:8090 \
-  -v /srv/hopwatch-hub:/data --restart unless-stopped ghcr.io/stomko11/hopwatch-hub:latest
+# probe and hub
+docker run -d --name hopwatch --network host --cap-add NET_RAW -e HOPWATCH_HUB=true \
+  -v /srv/hopwatch:/data --restart unless-stopped ghcr.io/stomko11/hopwatch:latest
 ```
-
-## Environment
-
-Only what has to be known before the web UI is reachable:
-
-| Variable | Default | |
-|---|---|---|
-| `HOPWATCH_PORT` | probe `8095`, hub `8090` | web UI port |
-| `HOPWATCH_BIND` | all | address to listen on |
-| `HOPWATCH_DATA` | `/data` | data folder |
-| `HOPWATCH_RESET_PASSWORD` | `false` | `true` removes the admin password at start |
-| `HOPWATCH_LOG` | `INFO` | log level |
 
 ## Probe API
 
@@ -100,8 +110,8 @@ login or `Authorization: Bearer <token>`. Browser requests that change something
 ```sh
 python3 -m unittest discover -s probe/tests
 python3 -m unittest discover -s hub/tests
-docker build -f probe/Dockerfile -t hopwatch-probe:dev .
-docker build -f hub/Dockerfile -t hopwatch-hub:dev .
+python3 -m unittest discover -s launcher/tests
+docker build -t hopwatch:dev .
 ```
 
 Plain Python standard library and plain JavaScript (`ui/` is shared by both), no build step.

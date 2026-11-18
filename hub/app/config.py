@@ -85,6 +85,24 @@ class Config:
         with self.lock:
             return copy.deepcopy(self.data)
 
+    @staticmethod
+    def local_probe():
+        """The probe in the same container (set up by the launcher), or None. Not stored, not editable."""
+        url, tok = os.environ.get("HOPWATCH_LOCAL_PROBE_URL"), os.environ.get("HOPWATCH_LOCAL_TOKEN")
+        if not url or not tok:
+            return None
+        name = "This site"
+        try:
+            with open(os.environ.get("HOPWATCH_LOCAL_PROBE_CONFIG", "")) as f:
+                name = (json.load(f).get("site_name") or "").strip() or name
+        except (OSError, ValueError):
+            pass
+        return {"id": "local", "name": name[:40], "url": url, "token": tok, "enabled": True, "local": True}
+
+    def probes(self):
+        lp = self.local_probe()
+        return ([lp] if lp else []) + self.get()["probes"]
+
     def _write(self):
         tmp = self.path + ".tmp"
         with open(tmp, "w") as f:
@@ -97,6 +115,7 @@ class Config:
         with self.lock:
             cur = copy.deepcopy(self.data)
             new = dict(new)
+            new["probes"] = [p for p in (new.get("probes") or []) if not p.get("local") and p.get("id") != "local"]
             new["security"] = {**cur["security"], **{k: v for k, v in (new.get("security") or {}).items()
                                                     if k in ("view_requires_login", "cors_origins")}}
             old_tok = {p["id"]: p["token"] for p in cur["probes"]}
@@ -123,4 +142,8 @@ class Config:
                          "tokens": [{"id": t["id"], "name": t["name"], "created": t["created"]} for t in sec["tokens"]]}
         for p in c["probes"]:
             p["token_set"] = bool(p.pop("token"))
+        lp = self.local_probe()
+        if lp:
+            lp.pop("token")
+            c["probes"].insert(0, {**lp, "token_set": True})
         return c

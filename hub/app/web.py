@@ -46,13 +46,13 @@ def iso(t):
 
 def probes(h, q=None, enabled=True):
     """Probes picked in ?probe=a,b (default: all enabled)."""
-    ps = [p for p in h.app.cfg.get()["probes"] if p["enabled"] or not enabled]
+    ps = [p for p in h.app.cfg.probes() if p["enabled"] or not enabled]
     want = set(_list(q or {}, "probe"))
     return [p for p in ps if not want or p["id"] in want]
 
 
 def by_id(h, pid):
-    p = next((p for p in h.app.cfg.get()["probes"] if p["id"] == pid), None)
+    p = next((p for p in h.app.cfg.probes() if p["id"] == pid), None)
     if not p:
         raise KeyError("no such probe")
     return p
@@ -63,7 +63,7 @@ def api_info(h, q, _):
     c = h.app.cfg.get()
     sec = c["security"]
     return {"product": "Hopwatch Hub", "version": VERSION, "site": c["name"], "now": time.time(),
-            "probes": len(c["probes"]),
+            "probes": len(h.app.cfg.probes()),
             "auth": {"admin": h.is_admin(), "password_set": bool(sec["password_hash"]),
                      "view_requires_login": sec["view_requires_login"], "can_view": h.can_view()}}
 
@@ -267,7 +267,7 @@ def api_probe_test(h, q, _):
     b = h._body()
     p = {"name": b.get("name") or "probe", "url": str(b.get("url") or "").rstrip("/"), "token": b.get("token") or ""}
     if not p["token"] and b.get("id"):
-        p["token"] = next((x["token"] for x in h.app.cfg.get()["probes"] if x["id"] == b["id"]), "")
+        p["token"] = next((x["token"] for x in h.app.cfg.probes() if x["id"] == b["id"]), "")
     info = hub.call(p, "/api/info", timeout=8)
     if info.get("product") != "Hopwatch Probe":
         raise ValueError("that address does not answer like a Hopwatch Probe")

@@ -1,14 +1,13 @@
-# Self-hosted Gitea: after every push to main, run the tests, build the hub image and push it
-# to the Gitea container registry. Unraid then only needs Docker -> Check for updates -> Update.
+# Self-hosted Gitea: after every push to main, run the tests, build the image and push it to the
+# Gitea container registry. Unraid then only needs Docker -> Check for updates -> Update.
 # Needs in the repository (Settings -> Actions):
 #   secret   REGISTRY_TOKEN  personal token with package read + write
 #   variable REGISTRY        the Gitea address over https, e.g. git.example.com
 # (GitHub ignores this folder and uses .github/workflows instead.)
-name: hub
+name: image
 on:
   push:
     branches: [main]
-    paths: ["hub/**", "ui/**", "shared/**", ".gitea/workflows/hub.yml"]
   workflow_dispatch:
 
 jobs:
@@ -18,7 +17,10 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Tests
-        run: python3 -m unittest discover -s hub/tests
+        run: |
+          python3 -m unittest discover -s probe/tests
+          python3 -m unittest discover -s hub/tests
+          python3 -m unittest discover -s launcher/tests
 
       - name: Build and push
         env:
@@ -28,10 +30,10 @@ jobs:
           ACTOR: ${{ github.actor }}
         run: |
           set -e
-          IMG="$REGISTRY/$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')/hopwatch-hub"
-          VER="$(sed -n 's/^VERSION = "\(.*\)"/\1/p' hub/app/config.py)-${GITHUB_SHA::7}"
+          IMG="$REGISTRY/$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')/hopwatch"
+          VER="$(sed -n 's/^VERSION = "\(.*\)"/\1/p' probe/app/config.py)-${GITHUB_SHA::7}"
           echo "$TOKEN" | docker login "$REGISTRY" -u "$ACTOR" --password-stdin
-          docker build --label org.opencontainers.image.version="$VER" -t "$IMG:latest" -t "$IMG:$VER" -f hub/Dockerfile .
+          docker build --label org.opencontainers.image.version="$VER" -t "$IMG:latest" -t "$IMG:$VER" .
           docker push "$IMG:$VER"
           docker push "$IMG:latest"
           docker logout "$REGISTRY"

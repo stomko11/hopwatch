@@ -1,0 +1,34 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>hopwatch</Name>
+  <Repository>ghcr.io/stomko11/hopwatch:latest</Repository>
+  <Registry>https://github.com/stomko11/hopwatch/pkgs/container/hopwatch</Registry>
+  <Network>host</Network>
+  <MyIP/>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/stomko11/hopwatch/issues</Support>
+  <Project>https://github.com/stomko11/hopwatch</Project>
+  <Overview>Hopwatch Probe pings your targets every second, keeps the history (every ping for days, minute and 5-minute averages for months) and runs MTR on demand, on a schedule, or automatically when a target goes down, loses packets or slows down. Every result can be copied for a support ticket or exported as an evidence pack.&#xD;
+&#xD;
+Hopwatch Hub shows several probes on one page and tells problems several sites see at the same moment (the target's side) from problems only one site sees (that site's path or its own uplink). Turn it on in the same container with "Run the hub"; the local probe shows up in it by itself.&#xD;
+&#xD;
+Everything else is set in the web UI. Host network is recommended so MTR shows your real first hop.</Overview>
+  <Category>Network:Other Tools:Utilities</Category>
+  <WebUI>http://[IP]:8095/</WebUI>
+  <TemplateURL>https://raw.githubusercontent.com/stomko11/hopwatch/main/unraid/hopwatch.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/stomko11/hopwatch/main/docs/icon.png</Icon>
+  <ExtraParams>--cap-add=NET_RAW --log-opt max-size=10m</ExtraParams>
+  <PostArgs/>
+  <CPUset/>
+  <DonateText/>
+  <DonateLink/>
+  <Requires/>
+  <Config Name="Run the probe" Target="HOPWATCH_PROBE" Default="true|false" Mode="" Description="Ping and MTR from this server." Type="Variable" Display="always" Required="true" Mask="false">true</Config>
+  <Config Name="Probe web UI port" Target="HOPWATCH_PROBE_PORT" Default="8095" Mode="" Description="With host network this is the port on the server. If you change it, also change the WebUI link under Advanced." Type="Variable" Display="always" Required="true" Mask="false">8095</Config>
+  <Config Name="Run the hub" Target="HOPWATCH_HUB" Default="false|true" Mode="" Description="One page for several probes. Usually on one server only." Type="Variable" Display="always" Required="true" Mask="false">false</Config>
+  <Config Name="Hub web UI port" Target="HOPWATCH_HUB_PORT" Default="8090" Mode="" Description="Port of the hub web UI (only used when the hub runs)." Type="Variable" Display="always" Required="true" Mask="false">8090</Config>
+  <Config Name="Data" Target="/data" Default="/mnt/user/appdata/hopwatch" Mode="rw" Description="Probe settings, ping history and MTR results (about 250 MB a year for 50 targets); hub settings in the hub subfolder." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/hopwatch</Config>
+  <Config Name="Reset admin password" Target="HOPWATCH_RESET_PASSWORD" Default="false|true" Mode="" Description="true removes the admin password at the next start, so you can set a new one. Switch it back to false afterwards." Type="Variable" Display="advanced" Required="false" Mask="false">false</Config>
+  <Config Name="Log level" Target="HOPWATCH_LOG" Default="INFO|DEBUG|WARNING" Mode="" Description="" Type="Variable" Display="advanced" Required="false" Mask="false">INFO</Config>
+</Container>

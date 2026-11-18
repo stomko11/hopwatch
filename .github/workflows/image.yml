@@ -1,12 +1,10 @@
-name: hub
+name: image
 
 on:
   push:
     branches: [main]
-    tags: ["hub-v*"]
-    paths: ["hub/**", "shared/**", "ui/**", ".github/workflows/hub.yml"]
+    tags: ["v*"]
   pull_request:
-    paths: ["hub/**", "shared/**"]
 
 permissions:
   contents: read
@@ -20,7 +18,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - run: python -m unittest discover -s probe/tests
       - run: python -m unittest discover -s hub/tests
+      - run: python -m unittest discover -s launcher/tests
 
   image:
     needs: test
@@ -38,15 +38,15 @@ jobs:
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository_owner }}/hopwatch-hub
+          images: ghcr.io/${{ github.repository_owner }}/hopwatch
           tags: |
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/hub-v') }}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
             type=raw,value=edge,enable=${{ github.ref == 'refs/heads/main' }}
-            type=match,pattern=hub-v(.*),group=1
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
       - uses: docker/build-push-action@v6
         with:
           context: .
-          file: hub/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}

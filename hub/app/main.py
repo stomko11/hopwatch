@@ -15,7 +15,9 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-sys.path.insert(1, os.path.join(HERE, "..", "..", "shared"))
+for _d in (os.path.join(HERE, "..", "shared"), os.path.join(HERE, "..", "..", "shared")):   # image, checkout
+    if os.path.isdir(_d):
+        sys.path.insert(1, _d)
 
 from auth import Auth            # noqa: E402
 from config import VERSION, Config   # noqa: E402

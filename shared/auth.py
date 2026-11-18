@@ -60,6 +60,9 @@ class Auth:
     def check_token(self, tok: str) -> bool:
         if not tok:
             return False
+        local = os.environ.get("HOPWATCH_LOCAL_TOKEN")    # set by the launcher when probe and hub share a container
+        if local and len(local) >= 32 and hmac.compare_digest(tok, local):
+            return True
         h = token_hash(tok)
         return any(hmac.compare_digest(h, t["hash"]) for t in self.cfg.get()["security"]["tokens"])
 

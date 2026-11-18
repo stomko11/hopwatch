@@ -17,7 +17,8 @@ COOKIE = "hopwatch_session"
 
 def find_ui(app_dir):
     """The shared UI kit: next to the app in an image, at the repo root in a checkout."""
-    for d in (os.environ.get("HOPWATCH_UI"), os.path.join(app_dir, "ui"), os.path.join(app_dir, "..", "..", "ui")):
+    for d in (os.environ.get("HOPWATCH_UI"), os.path.join(app_dir, "ui"), os.path.join(app_dir, "..", "ui"),
+              os.path.join(app_dir, "..", "..", "ui")):
         if d and os.path.isdir(d):
             return os.path.abspath(d)
     return os.path.join(app_dir, "static")
