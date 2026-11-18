@@ -66,6 +66,22 @@ class CorrelateTest(unittest.TestCase):
         self.assertEqual([(i["kind"], i["t0"], i["t1"]) for i in r["incidents"]], [("target", 60, 300)])
 
 
+class RoleTest(unittest.TestCase):
+    def test_roles_are_separate_locations(self):
+        d = {"a": {"step": 60, "series": [{"host": "h1", "location": "AMS", "role": "Own", "points": pts(0, 60, [30])},
+                                          {"host": "h2", "location": "AMS", "role": "ISP", "points": pts(0, 60, [0])}]},
+             "b": {"step": 60, "series": [{"host": "h1", "location": "AMS", "role": "Own", "points": pts(0, 60, [30])},
+                                          {"host": "h2", "location": "AMS", "role": "ISP", "points": pts(0, 60, [0])}]}}
+        r = hub.correlate(d, {}, {"loss": 1, "jitter": None, "delay": None}, 2)
+        self.assertEqual([i["location"] for i in r["incidents"]], ["AMS · Own"])
+
+    def test_sites_needed(self):
+        self.assertEqual(hub.sites_needed(0, 3), 3)       # all
+        self.assertEqual(hub.sites_needed(2, 3), 2)
+        self.assertEqual(hub.sites_needed(3, 2), 2)       # an offline site doesn't block everything
+        self.assertEqual(hub.sites_needed(0, 0), 1)
+
+
 class JoinTest(unittest.TestCase):
     def test_gaps_shorter_than_join_are_one_incident(self):
         a = pts(0, 10, [30, 0, 0, 0, 30, 0, 0, 0, 0, 0, 0, 0, 30])     # gaps of 40 s and 80 s

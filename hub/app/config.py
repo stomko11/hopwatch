@@ -6,13 +6,14 @@ import re
 import secrets
 import threading
 
-VERSION = "0.2.3"
+VERSION = "0.2.4"
 
 DEFAULTS = {
     "name": "Hopwatch Hub",
     "probes": [],            # [{"id", "name", "url", "token", "enabled"}]
     "local_name": "",        # name for the probe in the same container (empty = its own site name)
-    "correlate": {"min_sites": 2, "loss": 1.0, "jitter": 10.0, "delay": 50.0,
+    # min_sites 0 = all sites that answer (follows the number of probes)
+    "correlate": {"min_sites": 0, "loss": 1.0, "jitter": 10.0, "delay": 50.0,
                   "use_loss": True, "use_jitter": False, "use_delay": False, "site_share": 50},
     "security": {"password_hash": "", "view_requires_login": False, "cors_origins": "", "tokens": []},
 }
@@ -43,8 +44,8 @@ def validate(cfg: dict) -> dict:
             k[f] = float(k[f])
     except (TypeError, ValueError):
         raise ConfigError("correlation: not a number")
-    if not 1 <= k["min_sites"] <= 50:
-        raise ConfigError("correlation: sites must be 1 to 50")
+    if not 0 <= k["min_sites"] <= 50:
+        raise ConfigError("correlation: sites must be 0 (all) to 50")
     if not 1 <= k["site_share"] <= 100:
         raise ConfigError("correlation: site share must be 1 to 100 %")
     for f in ("use_loss", "use_jitter", "use_delay"):

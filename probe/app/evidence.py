@@ -31,13 +31,14 @@ def runs_text(runs) -> str:
 def series_csv(data, targets, step) -> str:
     """data: {host: [(t, acc or None)]} from Store.series."""
     loc = {t["host"]: t["location"] for t in targets}
+    role = {t["host"]: t.get("role") or "" for t in targets}
     out = io.StringIO()
     w = csv.writer(out)
-    w.writerow(["time_utc", "location", "target", "seconds", "sent", "lost", "loss_pct", "avg_ms", "min_ms", "max_ms", "jitter_ms"])
+    w.writerow(["time_utc", "location", "role", "target", "seconds", "sent", "lost", "loss_pct", "avg_ms", "min_ms", "max_ms", "jitter_ms"])
     for host, rows in data.items():
         for t, v in rows:
             if v:
-                w.writerow([iso(t), loc.get(host, ""), host, step, v["sent"], v["lost"], v["loss"],
+                w.writerow([iso(t), loc.get(host, ""), role.get(host, ""), host, step, v["sent"], v["lost"], v["loss"],
                             v["avg"], v["min"], v["max"], v["jitter"]])
     return out.getvalue()
 

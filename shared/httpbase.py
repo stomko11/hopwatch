@@ -12,7 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import auth as authmod
 
 log = logging.getLogger("web")
-COOKIE = "hopwatch_session"
+COOKIE = "hopwatch_session"   # base name; every app and port gets its own (see serve)
 
 
 def find_ui(app_dir):
@@ -27,6 +27,7 @@ def find_ui(app_dir):
 class Handler(BaseHTTPRequestHandler):
     server_version = "hopwatch"
     routes: dict = {}
+    cookie = COOKIE
     static_dir = ""
     ui_dir = ""
     sys_version = ""
@@ -84,7 +85,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _cookie(self):
         c = cookies.SimpleCookie(self.headers.get("Cookie") or "")
-        return c[COOKIE].value if COOKIE in c else None
+        return c[self.cookie].value if self.cookie in c else None
 
     def _client_ip(self):
         return self.client_address[0]
@@ -190,7 +191,7 @@ def api_login(h, q, _):
 
 
 def _set_cookie(h, val, maxage=authmod.SESSION_DAYS * 86400):
-    h._send(200, {"ok": True}, extra={"Set-Cookie": f"{COOKIE}={val}; Path=/; HttpOnly; SameSite=Strict; Max-Age={maxage}"})
+    h._send(200, {"ok": True}, extra={"Set-Cookie": f"{h.cookie}={val}; Path=/; HttpOnly; SameSite=Strict; Max-Age={maxage}"})
 
 
 def api_logout(h, q, _):
@@ -236,6 +237,8 @@ COMMON_ROUTES = {
 
 def serve(handler_cls, app, port: int, bind: str = ""):
     handler_cls.app = app
+    # browsers share cookies between ports of one host: probe and hub on one server need different names
+    handler_cls.cookie = f"{COOKIE}_{handler_cls.server_version.replace('hopwatch-', '')}_{port}"
     srv = ThreadingHTTPServer((bind, port), handler_cls)
     srv.daemon_threads = True
     log.info("web UI on port %d", port)

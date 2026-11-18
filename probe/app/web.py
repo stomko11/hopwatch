@@ -54,8 +54,9 @@ def api_status(h, q, _):
     for r in rows:
         r["tcp"] = tcp.get(r["host"])
     busy = a.mtr.busy()
+    c = a.cfg.get()
     return {"now": time.time(), "targets": rows, "mtr": busy, "error": a.pinger.error,
-            "window_s": a.cfg.get()["alerts"]["window_s"]}
+            "window_s": c["alerts"]["window_s"], "roles": c["roles"]}
 
 
 def api_series(h, q, _):
@@ -76,10 +77,13 @@ def api_series(h, q, _):
     data, tier, step = a.store.series([t["host"] for t in targets], int(t0), int(t1), points, c["retention"], now, live)
     group = q.get("group") or "host"
     out = []
-    if group == "location":
-        locs = {}
+    if group in ("location", "role"):
+        # "role" keeps the roles of a location apart: "AMS · ISP" and "AMS · Own" are never averaged together
+        locs, meta = {}, {}
         for t in targets:
-            locs.setdefault(t["location"], []).append(t["host"])
+            key = t["location"] if group == "location" or not t.get("role") else f'{t["location"]} · {t["role"]}'
+            locs.setdefault(key, []).append(t["host"])
+            meta[key] = (t["location"], (t.get("role") or "") if group == "role" else "")
         for loc, hosts in locs.items():
             buckets = []
             for i in range(len(data[hosts[0]])):
@@ -94,12 +98,12 @@ def api_series(h, q, _):
                 jits = [v["jitter"] for v in vals if v["jitter"] is not None]
                 buckets.append([ts, round(sum(avgs) / len(avgs), 2) if avgs else None, round(100.0 * lost / sent, 2),
                                 round(sum(jits) / len(jits), 2) if jits else None, max(v["max"] or 0 for v in vals) or None])
-            out.append({"name": loc, "location": loc, "hosts": hosts, "points": buckets})
+            out.append({"name": loc, "location": meta[loc][0], "role": meta[loc][1], "hosts": hosts, "points": buckets})
     else:
         for t in targets:
             pts = [[ts, v["avg"], v["loss"], v["jitter"], v["max"]] if v else [ts, None, None, None, None]
                    for ts, v in data[t["host"]]]
-            out.append({"name": t["host"], "location": t["location"], "host": t["host"], "points": pts})
+            out.append({"name": t["host"], "location": t["location"], "role": t.get("role") or "", "host": t["host"], "points": pts})
     return {"tier": tier, "step": step, "from": t0, "to": t1, "columns": ["t", "avg", "loss", "jitter", "max"], "series": out}
 
 
@@ -242,7 +246,18 @@ def api_tcpcheck(h, q, _):
 
 
 def api_import_targets(h, q, _):
-    return {"targets": [{k: t[k] for k in ("location", "host")} for t in netdata_import.targets(h._body().get("url"))]}
+    """Targets of a Netdata agent. Optional: jobs whose name ends with `suffix` (e.g. "GW") get
+    `suffix_role` and lose the suffix, so "AMS GW" becomes location "AMS" with role "ISP";
+    all other jobs get `other_role`."""
+    b = h._body()
+    suffix = str(b.get("suffix") or "").strip()
+    out = []
+    for t in netdata_import.targets(b.get("url")):
+        loc, role = t["location"], str(b.get("other_role") or "")
+        if suffix and loc.lower().endswith(" " + suffix.lower()):
+            loc, role = loc[: -len(suffix) - 1].strip(), str(b.get("suffix_role") or "")
+        out.append({"location": loc, "host": t["host"], "role": role})
+    return {"targets": out}
 
 
 def api_import_history(h, q, _):

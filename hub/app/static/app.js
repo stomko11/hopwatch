@@ -131,7 +131,7 @@
     $('main').innerHTML = '<div class="card"><div class="bd row gap12"><span id="ovR"></span><span class="grow"></span><span class="xs muted" id="ovUpd"></span></div></div>' +
       '<div class="kpis" id="kpis"></div><div class="row" id="pstrip"></div>' +
       '<div class="card"><div class="hd"><h2 id="mcT">…</h2><span class="sub" id="mcS"></span><span class="grow"></span><span id="ovV"></span><span id="ovS"></span>' +
-      '<button class="btn-s btn-g btn-i" id="mcX" title="Enlarge">' + I('expand') + '</button></div><div class="bd"><div id="pinbar"></div><div id="mc"><div class="empty" style="height:300px;display:flex;align-items:center;justify-content:center">Loading…</div></div>' +
+      '<button class="btn-s btn-g btn-i" id="mcX" title="Enlarge">' + I('expand') + '</button></div><div class="bd"><div id="mcW"></div><div id="pinbar"></div><div id="mc"><div class="empty" style="height:300px;display:flex;align-items:center;justify-content:center">Loading…</div></div>' +
       '<div class="mt12 small muted">How many IPs had problems · red = several sites, amber = one site only, purple = one site\u2019s own link</div><div id="ms"></div></div></div>' +
       '<div class="card"><div class="hd"><h2>Locations</h2><span class="sub" id="ovSub"></span></div><div class="bd col gap12"><div class="row"><div class="search" style="width:240px">' + I('search') + '<input id="ovQ" placeholder="Filter" value="' + esc(f.q) + '"></div><span id="ovOnly"></span><div id="ovL"></div></div><div id="mx"></div></div></div>';
     $('ovQ').oninput = function () { f.q = this.value.toLowerCase(); HW.ls('hovf', f); draw(); };
@@ -171,10 +171,15 @@
       var sg = SIGS.filter(function (x) { return x[0] === f.sig; })[0], th = ov.thresholds, K = ov.min_sites;
       var pname = f.view === 'common' ? null : (ov.probes.filter(function (p) { return p.id === f.view; })[0] || {}).name;
       $('mcT').textContent = sg[1] + (pname ? ' · from ' + pname : ' · seen from all sites');
-      $('mcS').textContent = (pname ? 'locations where ' + pname + ' saw ' : 'locations where at least ' + K + ' sites saw at the same moment ') +
+      $('mcS').textContent = (pname ? 'locations where ' + pname + ' saw ' : 'locations where ' + (ov.all_sites ? 'all ' + K : 'at least ' + K) + ' sites saw at the same moment ') +
         ({ loss: 'loss over ' + th.loss + '%', delay: 'latency over its normal by ' + th.delay + ' ms or more', jitter: 'jitter over ' + th.jitter + ' ms' })[f.sig] + ' · coloured lane at the bottom = incidents';
+      var miss = Object.keys(ov.errors || {}), total = (S.live ? S.live.probes.length : ov.probes.length);
+      $('pinbar').dataset.miss = miss.length;
+      var warn = miss.length ? '<div class="banner warn" style="margin-bottom:10px">' + I('alert') + 'Not answering: ' + esc(miss.join(', ')) + '. ' +
+        (f.view === 'common' ? 'Common now shows what the remaining ' + (total - miss.length) + ' of ' + total + ' sites saw – it can\u2019t tell the target\u2019s side from a site problem until all answer.' : '') + '</div>' : '';
       var ser = series(), o = opts();
       HW.chart($('mc'), ser, o);
+      $('mcW').innerHTML = warn;
       $('mcX').onclick = function () { HW.expandChart($('mcT').textContent, ser, opts()); };
       var t = ov.simultaneous.map(function (b) { return b[0]; });
       HW.chart($('ms'), [{ name: 'Several sites', color: HW.cssv('--bad'), t: t, v: ov.simultaneous.map(function (b) { return b[1]; }) },
@@ -201,12 +206,14 @@
     }
     function draw() {
       var l = S.live; if (!l) return;
-      var ps = l.probes, K = Math.min(l.correlate.min_sites, Math.max(1, okProbes(l).length)), live = rp.get().range === 'live';
+      var ps = l.probes, nOk = Math.max(1, okProbes(l).length), K = l.correlate.min_sites ? Math.min(l.correlate.min_sites, nOk) : nOk, live = rp.get().range === 'live';
+      var upRoles = {}; ps.forEach(function (p) { (p.roles || []).forEach(function (r) { if (r.upstream) upRoles[r.name] = 1; }); });
       if (!live && !ov) return;
       var locs = {}, order = [];
       if (live) {
         ps.forEach(function (p) { (p.targets || []).forEach(function (t) {
-          var L = locs[t.location]; if (!L) { L = locs[t.location] = { hosts: {}, by: {} }; order.push(t.location); }
+          var key = t.location + (t.role ? ' · ' + t.role : '');
+          var L = locs[key]; if (!L) { L = locs[key] = { hosts: {}, by: {} }; order.push(key); }
           L.hosts[t.host] = 1; var c = L.by[p.id] = L.by[p.id] || { st: 'disabled', avg: [], loss: 0 };
           if (RANK[t.status] > RANK[c.st]) c.st = t.status; if (t.avg != null) c.avg.push(t.avg); c.loss = Math.max(c.loss, t.loss || 0); }); });
         Object.keys(locs).forEach(function (x) { var L = locs[x]; Object.keys(L.by).forEach(function (p) { var c = L.by[p]; c.avgv = c.avg.length ? c.avg.reduce(function (a, b) { return a + b; }, 0) / c.avg.length : null; }); });
@@ -244,10 +251,20 @@
         return '<span class="row wrapn gap4"><span class="dot ' + c.st + '"></span><span class="num">' + (c.st === 'down' ? '<span class="down">down</span>' : HW.fnum(c.avgv) + '<span class="faint"> ms</span>') + '</span>' +
           (c.loss > 0 ? '<span class="num ' + (RANK[c.st] >= 3 ? 'bad' : 'warn') + '" title="' + (live ? 'loss now' : 'average loss; worst moment ' + HW.fnum(c.max, 0) + '%') + '">' + HW.fnum(c.loss, c.loss < 1 ? 1 : 0) + '%' + (!live && c.max > c.loss ? '<span class="faint"> ↑' + HW.fnum(c.max, 0) + '</span>' : '') + '</span>' : '') + '</span>'; };
       var vr = { bad: 2, warn: 1, ok: 0 };
+      // with an ISP-edge role in the location: is the problem behind the ISP's gateway or at it?
+      var where = function (x) {
+        var parts = x.split(' · '), base = parts[0], role = parts[1];
+        if (!role || verdict(locs[x])[0] === 'ok') return '';
+        var edge = order.filter(function (k) { var pr = k.split(' · '); return pr[0] === base && pr[1] && upRoles[pr[1]]; });
+        if (!edge.length) return '';
+        if (upRoles[role]) return 'at the ISP edge or before it';
+        return edge.every(function (k) { return verdict(locs[k])[0] === 'ok'; }) ? 'past the ISP edge (it is clean)' : 'ISP edge affected too';
+      };
       var cols = [{ key: 'loc', label: 'Location', text: function (x) { return x; }, html: function (x) { return '<b>' + esc(x) + '</b> <span class="xs muted">' + Object.keys(locs[x].hosts).length + ' IP</span>'; } }]
         .concat(ps.map(function (p) { return { key: 'p:' + p.id, label: p.name, text: function (x) { var c = locs[x].by[p.id]; return c ? HW.fnum(c.avgv) + ' ms ' + HW.fnum(c.loss, 0) + '%' : ''; },
           sort: function (x) { var c = locs[x].by[p.id]; return c ? (c.loss || 0) * 1000 + (c.avgv || 0) : -1; }, html: function (x) { return cell(locs[x].by[p.id]); } }; }))
-        .concat([{ key: 'verdict', label: 'Verdict', text: function (x) { return verdict(locs[x])[1]; }, sort: function (x) { return vr[verdict(locs[x])[0]]; }, html: function (x) { var v = verdict(locs[x]); return '<span class="pill ' + v[0] + '">' + esc(v[1]) + '</span>'; } },
+        .concat([{ key: 'where', label: 'Where', text: function (x) { return where(x); }, html: function (x) { var w = where(x); return w ? '<span class="small ' + (/past/.test(w) ? 'warn' : 'bad') + '">' + esc(w) + '</span>' : '<span class="faint">–</span>'; } },
+          { key: 'verdict', label: 'Verdict', text: function (x) { return verdict(locs[x])[1]; }, sort: function (x) { return vr[verdict(locs[x])[0]]; }, html: function (x) { var v = verdict(locs[x]); return '<span class="pill ' + v[0] + '">' + esc(v[1]) + '</span>'; } },
           { key: 'more', label: 'More', text: function () { return ''; }, html: function (x) { return '<button class="btn-xs btn-g btn-i" data-loc="' + esc(x) + '">' + I('more') + '</button>'; } }]);
       var mxKey = 'hub-ov-' + ps.map(function (p) { return p.id; }).join('-');
       if (!S.mx || S.mx.key !== mxKey) S.mx = { key: mxKey, t: HW.table($('mx'), { id: mxKey, rows: rows, columns: cols, empty: 'No locations match.' }) };
@@ -272,7 +289,7 @@
       var c = l.correlate;
       var th = HW.lsj('hth', { min: c.min_sites, uL: c.use_loss, L: c.loss, uJ: c.use_jitter, J: c.jitter, uD: c.use_delay, D: c.delay });
       $('main').innerHTML = '<div class="card"><div class="bd col gap12"><div class="row gap12"><span id="iR"></span><div id="iP"></div><div id="iL"></div><div id="iK"></div><div id="iS"></div></div>' +
-        '<div class="row gap12"><label class="row gap4 small"><b>Seen from at least</b><input type="number" id="tMin" min="1" max="50" value="' + th.min + '" style="width:70px"><span>sites</span></label>' +
+        '<div class="row gap12"><label class="row gap4 small"><b>Seen from</b><select id="tMin"><option value="0"' + (+th.min === 0 ? ' selected' : '') + '>all sites</option>' + l.probes.map(function (p, i) { return i ? '<option value="' + (i + 1) + '"' + (+th.min === i + 1 ? ' selected' : '') + '>at least ' + (i + 1) + '</option>' : ''; }).join('') + '<option value="1"' + (+th.min === 1 ? ' selected' : '') + '>any one site</option></select></label>' +
         '<label class="row gap4 small"><input type="checkbox" id="tuL"' + (th.uL ? ' checked' : '') + '>loss &gt;<input type="number" id="tL" value="' + th.L + '" style="width:70px">%</label>' +
         '<label class="row gap4 small"><input type="checkbox" id="tuJ"' + (th.uJ ? ' checked' : '') + '>jitter &gt;<input type="number" id="tJ" value="' + th.J + '" style="width:70px">ms</label>' +
         '<label class="row gap4 small"><input type="checkbox" id="tuD"' + (th.uD ? ' checked' : '') + '>delay &gt; normal +<input type="number" id="tD" value="' + th.D + '" style="width:70px">ms</label><label class="row gap4 small">lasting at least<input type="number" id="tDur" min="0" value="' + (f.dur || 0) + '" style="width:70px">s</label><span class="grow"></span><span class="xs muted" id="iRes"></span></div></div></div>' +
@@ -472,6 +489,7 @@
     Promise.all([api('/api/config'), api('/api/live').catch(function () { return { probes: [] }; })]).then(function (r) {
       var cfg = r[0], lv = {}; r[1].probes.forEach(function (p) { lv[p.id] = p; });
       var tabs = [['probes', 'Probes'], ['correlate', 'Correlation'], ['security', 'Security']];
+      if (!tabs.some(function (t) { return t[0] === tab; })) tab = tabs[0][0];
       $('main').innerHTML = '<div class="tabs" id="st">' + tabs.map(function (t) { return '<button data-t="' + t[0] + '" class="' + (t[0] === tab ? 'on' : '') + '">' + t[1] + '</button>'; }).join('') + '</div><div id="sb" class="col gap12"></div>';
       $('st').onclick = function (e) { var b = e.target.closest('button'); if (b) { HW.ls('hsTab', b.dataset.t); location.hash = '#/settings?tab=' + b.dataset.t; } };
       var save = function (c) { return api('/api/config', { method: 'PUT', body: c }).then(function (x) { HW.toast('Saved'); loadInfo().then(route); return x; }).catch(function (e) { HW.toast(e.message, true); }); };
@@ -491,7 +509,7 @@
       if (tab === 'correlate') {
         var k = cfg.correlate;
         $('sb').innerHTML = '<div class="card"><div class="hd"><h2>Correlation defaults</h2><span class="sub">what counts as a problem, and when it is the target\u2019s side</span></div><div class="bd col gap12">' +
-          '<div class="form"><div class="field"><label>Seen from at least (sites)</label><input type="number" id="cK" min="1" max="50" value="' + k.min_sites + '"><span class="hint">A problem this many sites see at the same moment is put on the target\u2019s side</span></div>' +
+          '<div class="form"><div class="field"><label>Seen from</label><select id="cK"><option value="0"' + (!k.min_sites ? ' selected' : '') + '>All sites that answer</option>' + [1, 2, 3, 4, 5, 6, 8, 10].map(function (n) { return '<option value="' + n + '"' + (k.min_sites === n ? ' selected' : '') + '>at least ' + n + '</option>'; }).join('') + '</select><span class="hint">A problem this many sites see at the same moment is put on the target\u2019s side. Sites that don\u2019t answer are not counted.</span></div>' +
           '<div class="field"><label>Site link when (% of its targets)</label><input type="number" id="cS" min="1" max="100" value="' + k.site_share + '"><span class="hint">One site with loss on this share of its targets at once: its own uplink</span></div></div>' +
           HW.sw('cuL', k.use_loss, 'Packet loss', '') + '<div class="form"><div class="field"><label>Loss over (%)</label><input type="number" id="cL" value="' + k.loss + '"></div></div>' +
           HW.sw('cuJ', k.use_jitter, 'Jitter', '') + '<div class="form"><div class="field"><label>Jitter over (ms)</label><input type="number" id="cJ" value="' + k.jitter + '"></div></div>' +

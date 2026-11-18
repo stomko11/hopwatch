@@ -116,6 +116,14 @@ class ConfigTest(unittest.TestCase):
         c = config.validate({"targets": [{"location": "a", "host": "2001:db8::1"}, {"location": "b", "host": "dns.google"}]})
         self.assertEqual(len(c["targets"]), 2)
 
+    def test_roles(self):
+        c = config.validate({"roles": [{"name": "FX"}, {"name": "ISP", "upstream": True}],
+                             "targets": [{"location": "AMS", "host": "192.0.2.1", "role": "isp"},
+                                         {"location": "AMS", "host": "192.0.2.2", "role": "gone"}]})
+        self.assertEqual([t["role"] for t in c["targets"]], ["ISP", ""])     # case fixed, unknown dropped
+        with self.assertRaises(config.ConfigError):
+            config.validate({"roles": [{"name": "FX"}, {"name": "fx"}]})
+
     def test_limits(self):
         with self.assertRaises(config.ConfigError):
             config.validate({"ping": {"interval_ms": 1000, "timeout_ms": 2000}})

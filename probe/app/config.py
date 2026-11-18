@@ -10,14 +10,18 @@ import os
 import re
 import threading
 
-VERSION = "0.2.3"
+VERSION = "0.2.4"
 
 DEFAULTS = {
     "site_name": "",
     "targets": [
-        {"location": "Cloudflare DNS", "host": "1.1.1.1", "enabled": True},
-        {"location": "Google DNS", "host": "8.8.8.8", "enabled": True},
+        {"location": "Cloudflare DNS", "host": "1.1.1.1", "enabled": True, "role": ""},
+        {"location": "Google DNS", "host": "8.8.8.8", "enabled": True, "role": ""},
     ],
+    # Roles split the targets of one location, e.g. your own equipment and the ISP's gateway in front
+    # of it. A role marked "upstream" is the ISP edge: when it is clean and the others are not, the
+    # problem is past the ISP.
+    "roles": [{"name": "Own", "upstream": False}, {"name": "ISP", "upstream": True}],
     "ping": {"interval_ms": 1000, "timeout_ms": 1000, "size": 56},
     "alerts": {"window_s": 60, "loss_warn": 5, "loss_crit": 20, "rtt_warn_ms": 0, "rtt_crit_ms": 0},
     # Automatic MTR: when something goes wrong (and once more when it is fixed), so there is evidence
@@ -121,6 +125,19 @@ def validate(cfg: dict) -> dict:
     c["mtr"]["public_ip_url"] = url
     origins = str(c["security"].get("cors_origins") or "").strip()
     c["security"]["cors_origins"] = origins
+    roles, rnames = [], set()
+    for r in c.get("roles") or []:
+        n = str(r.get("name") or "").strip()[:30]
+        if not n:
+            continue
+        if n.lower() in rnames:
+            raise ConfigError(f"role '{n}' is listed twice")
+        rnames.add(n.lower())
+        roles.append({"name": n, "upstream": bool(r.get("upstream"))})
+    if len(roles) > 20:
+        raise ConfigError("at most 20 roles")
+    c["roles"] = roles
+    known = {r["name"].lower(): r["name"] for r in roles}
     seen, targets = set(), []
     for t in c.get("targets") or []:
         host = str(t.get("host") or "").strip()
@@ -130,7 +147,8 @@ def validate(cfg: dict) -> dict:
         if host in seen:
             raise ConfigError(f"target '{host}' is listed twice")
         seen.add(host)
-        targets.append({"location": loc, "host": host, "enabled": bool(t.get("enabled", True))})
+        role = known.get(str(t.get("role") or "").strip().lower(), "")     # a removed role leaves the target without one
+        targets.append({"location": loc, "host": host, "enabled": bool(t.get("enabled", True)), "role": role})
     if len(targets) > 500:
         raise ConfigError("at most 500 targets")
     c["targets"] = targets

@@ -252,3 +252,5 @@ details.help>summary::-webkit-details-marker{display:none} details.help>div{padd
 .modal.wide .box{width:min(1500px,96vw)}
 .pinbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px 12px;border-radius:var(--r2);background:var(--accent-soft);border:1px solid color-mix(in srgb,var(--accent) 35%,transparent)}
 .pinbar b{color:var(--accent)}
+.rolehd{display:flex;align-items:center;gap:6px;padding:7px 14px 3px;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);border-top:1px solid var(--border)}
+.rolehd:first-of-type{border-top:0}

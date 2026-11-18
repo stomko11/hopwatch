@@ -73,7 +73,8 @@ def _live(h):
         st = hub.call(p, "/api/status", timeout=6)
         info = hub.call(p, "/api/info", timeout=6)
         return {"site": info.get("site"), "version": info.get("version"), "error": st.get("error"),
-                "targets": st["targets"], "mtr": st["mtr"], "window_s": st["window_s"], "now": st["now"]}
+                "targets": st["targets"], "mtr": st["mtr"], "window_s": st["window_s"], "now": st["now"],
+                "roles": st.get("roles") or []}
     ps = probes(h)
     res = h.app.cache.get("live", 2.5, lambda: hub.each(ps, one))
     return [{"id": p["id"], "name": p["name"], "url": p["url"], **res.get(p["id"], {"error": "no answer"})} for p in ps]
@@ -112,11 +113,12 @@ def api_correlate(h, q, _):
     ps, t0, t1, res = _series(h, q, "host")
     names = {p["id"]: p["name"] for p in ps}
     data = {pid: d for pid, d in res.items() if "error" not in d}
-    k = int(q.get("min_sites") or c["correlate"]["min_sites"])
-    out = hub.correlate(data, names, _th(q, c), min(k, max(1, len(data))) if k > 0 else 1, c["correlate"]["site_share"] / 100)
+    k = int(q["min_sites"]) if q.get("min_sites") not in (None, "") else c["correlate"]["min_sites"]
+    K = hub.sites_needed(k, len(data))
+    out = hub.correlate(data, names, _th(q, c), K, c["correlate"]["site_share"] / 100)
     out.update({"from": t0, "to": t1, "probes": [{"id": p["id"], "name": p["name"]} for p in ps],
                 "errors": {names[pid]: d["error"] for pid, d in res.items() if "error" in d},
-                "min_sites": k, "thresholds": _th(q, c)})
+                "min_sites": K, "min_sites_setting": k, "thresholds": _th(q, c)})
     return out
 
 
@@ -129,10 +131,10 @@ def api_overview(h, q, _):
     names = {p["id"]: p["name"] for p in ps}
     data = {pid: d for pid, d in res.items() if "error" not in d}
     k = c["correlate"]
-    corr_b = hub.correlate(data, names, _th({}, c), min(k["min_sites"], max(1, len(data))), k["site_share"] / 100)
+    corr_b = hub.correlate(data, names, _th({}, c), hub.sites_needed(k["min_sites"], len(data)), k["site_share"] / 100)
     step, grid, locs = hub.align(data)
     normal = {hst: {p: hub._median([v[0] for v in grid[hst].get(p, {}).values()]) for p in data} for hst in grid}
-    K = min(k["min_sites"], max(1, len(data)))
+    K = hub.sites_needed(k["min_sites"], len(data))
     th = {"loss": k["loss"], "delay": k["delay"], "jitter": k["jitter"]}
     # per location and moment: the amount at least K sites saw at the same time (the K-th highest value
     # among the sites over the limit), worst IP of the location; 0 when fewer sites saw it
@@ -195,7 +197,7 @@ def api_overview(h, q, _):
     rows = {}
     for hst, by in grid.items():
         loc = locs[hst]
-        r = rows.setdefault(loc, {"location": loc, "hosts": [], "by": {}})
+        r = rows.setdefault(loc, {"location": loc, "hosts": [], "by": {}})   # "AMS · ISP" when the target has a role
         r["hosts"].append(hst)
         for p, pts in by.items():
             b = r["by"].setdefault(p, {"avg": [], "loss": [], "jit": []})
@@ -218,7 +220,7 @@ def api_overview(h, q, _):
         out_rows.append({"location": loc, "hosts": sorted(r["hosts"]), "by": by,
                          "several": sorted(v["target"]), "one": sorted(v["one"] - v["target"])})
     return {"from": t0, "to": t1, "step": step, "probes": [{"id": p["id"], "name": p["name"]} for p in ps],
-            "lines": lines, "by_probe": by_probe, "min_sites": K,
+            "lines": lines, "by_probe": by_probe, "min_sites": K, "all_sites": not k["min_sites"],
             "incidents": [{k2: i[k2] for k2 in ("t0", "t1", "kind", "location", "host", "signal", "site_names")} for i in corr_b["incidents"]][:500], "thresholds": th, "simultaneous": corr_b["buckets"], "locations": out_rows,
             "errors": {names[pid]: d["error"] for pid, d in res.items() if "error" in d}}
 

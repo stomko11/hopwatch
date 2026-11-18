@@ -79,6 +79,12 @@ class Cache:
 SIGNALS = ("loss", "jitter", "delay")
 
 
+def sites_needed(setting, answering):
+    """0 means all sites that answer; otherwise the setting, but never more than answer."""
+    answering = max(1, answering)
+    return answering if not setting else min(int(setting), answering)
+
+
 def _median(vals):
     vals = sorted(v for v in vals if v is not None)
     if not vals:
@@ -98,7 +104,8 @@ def align(per_probe):
             continue
         for s in d["series"]:
             h = s["host"]
-            locs.setdefault(h, s["location"])
+            # a role keeps its own name everywhere: "AMS · ISP" and "AMS · Own" are separate
+            locs.setdefault(h, s["location"] + (" · " + s["role"] if s.get("role") else ""))
             dst = grid.setdefault(h, {}).setdefault(pid, {})
             for t, avg, loss, jit, _mx in s["points"]:
                 if loss is None and avg is None:

@@ -182,10 +182,12 @@
           (RANK[w] >= 2 ? '<span class="pill ' + w + '">' + STATUS[w] + '</span>' : '') + '<span class="grow"></span>' +
           '<a class="btn-xs btn-g" href="#/charts?loc=' + encodeURIComponent(l) + '" title="Charts">' + I('chart') + '</a>' +
           '<button class="btn-xs" data-lm="' + esc(JSON.stringify(hosts)) + '">' + I('route') + 'MTR</button></div>' +
-          ts.map(function (t) {
+          byRole(ts, st.roles).map(function (t, k, arr) {
             var sp = spark[t.host] || { v: [], l: [] };
+            var rh = (t.role || arr.some(function (x) { return x.role; })) && (k === 0 || arr[k - 1].role !== t.role)
+              ? '<div class="rolehd">' + esc(t.role || 'no role') + (roleUp(st.roles, t.role) ? ' <span class="tag">ISP edge</span>' : '') + '</div>' : '';
             var ds = live ? t.status : t.live;
-            return '<div class="ipr"><div class="ip"><span class="dot ' + ds + (ds === 'ok' ? ' live' : '') + '" title="now: ' + (STATUS[ds] || ds) + '"></span><span class="ell" title="' + esc(t.host) + '">' + esc(t.host) + '</span>' + (tcpOk(t) ? '<span class="tag tcp" title="TCP ' + t.tcp.port + ' answers: TCP MTR possible">TCP</span>' : '') + '</div>' +
+            return rh + '<div class="ipr"><div class="ip"><span class="dot ' + ds + (ds === 'ok' ? ' live' : '') + '" title="now: ' + (STATUS[ds] || ds) + '"></span><span class="ell" title="' + esc(t.host) + '">' + esc(t.host) + '</span>' + (tcpOk(t) ? '<span class="tag tcp" title="TCP ' + t.tcp.port + ' answers: TCP MTR possible">TCP</span>' : '') + '</div>' +
               '<div>' + HW.spark(sp.v, sp.l, t.status === 'ok' ? 'var(--accent)' : 'var(--' + (t.status === 'warn' ? 'warn' : 'bad') + ')') + '</div>' +
               '<div class="r">' + (t.status === 'down' ? '<span class="down">down</span>' : t.avg == null ? '<span class="faint">–</span>' : HW.fnum(t.avg) + '<span class="faint"> ms</span>') + '</div>' +
               '<div class="r ' + (t.loss > 0 ? (RANK[t.status] >= 3 ? 'bad' : 'warn') : 'faint') + '"' + (!live && t.maxloss ? ' title="average loss; worst moment ' + HW.fnum(t.maxloss, 0) + '%"' : '') + '>' + (t.loss == null ? '–' : HW.fnum(t.loss, t.loss > 0 && t.loss < 1 ? 1 : 0) + '%') + '</div>' +
@@ -230,6 +232,12 @@
         mtr24 = { n: r.runs.length, auto: r.runs.filter(function (x) { return x.trig === 'auto'; }).length }; draw(); }).catch(function () { /* optional */ });
     }, 30000);
   }
+  /* targets of a location in role order: the ISP edge first, then the order of the roles list */
+  function byRole(ts, roles) {
+    var ord = {}; (roles || []).forEach(function (r, i) { ord[r.name] = (r.upstream ? 0 : 100) + i; });
+    return ts.slice().sort(function (a, b) { var x = a.role ? (ord[a.role] == null ? 500 : ord[a.role]) : 999, y = b.role ? (ord[b.role] == null ? 500 : ord[b.role]) : 999; return x - y; });
+  }
+  function roleUp(roles, name) { return (roles || []).some(function (r) { return r.name === name && r.upstream; }); }
   function kpi(ic, l, v, s) { return '<div class="kpi"><div class="l">' + I(ic) + esc(l) + '</div><div class="v">' + v + '</div><div class="s">' + (s || '') + '</div></div>'; }
 
   /* ------------------------------------------------------------ charts */
@@ -247,7 +255,7 @@
     var win = cf.custom ? { from: cf.custom[0], to: cf.custom[1] } : { range: cf.range };
     var hidden = { rtt: {}, loss: {}, jit: {} }, pin = null;
     var rp = HW.rangePicker($('rg'), RANGES, win, function (w) { win = w.range ? { range: w.range } : w; cf.custom = w.range ? null : [w.from, w.to]; if (w.range) cf.range = w.range; HW.ls('chf', cf); load(); });
-    HW.seg($('grp'), [['location', 'Per location'], ['host', 'Per IP']], cf.group, function (v) { cf.group = v; HW.ls('chf', cf); load(); });
+    HW.seg($('grp'), [['location', 'Per location'], ['role', 'Per role'], ['host', 'Per IP']], cf.group, function (v) { cf.group = v; HW.ls('chf', cf); load(); });
     $('mk').onchange = function () { cf.marks = this.checked; HW.ls('chf', cf); load(); };
     status().then(function (st) {
       var opts = locOpts(st).map(function (l) { return { value: 'loc:' + l.value, label: 'All of ' + l.label, group: 'Locations' }; }).concat(targetOpts(st));
@@ -559,6 +567,7 @@
     Promise.all([api('/api/config'), status()]).then(function (r) {
       var cfg = S.cfg = r[0], D = JSON.parse(JSON.stringify(cfg));
       var tabs = [['targets', 'Targets'], ['monitor', 'General & ping'], ['auto', 'Automatic MTR'], ['mtr', 'MTR & TCP'], ['retention', 'Retention'], ['security', 'Security'], ['import', 'Import']];
+      if (!tabs.some(function (t) { return t[0] === tab; })) tab = tabs[0][0];
       $('main').innerHTML = '<div class="tabs" id="stabs">' + tabs.map(function (t) { return '<button data-t="' + t[0] + '" class="' + (t[0] === tab ? 'on' : '') + '">' + t[1] + '</button>'; }).join('') + '</div><div id="sbody" class="col gap12"></div>';
       var dirty = function () { $('dirty').textContent = 'unsaved changes'; };
       $('stabs').onclick = function (e) { var b = e.target.closest('button'); if (!b) return; tab = b.dataset.t; HW.ls('setTab', tab);
@@ -619,13 +628,28 @@
             $('tc').onclick = function () { HW.copy(r.token, 'Token'); }; $('tk').onclick = HW.closeModal; api('/api/config').then(function (c) { toks(c.security.tokens); }); }).catch(function (e) { HW.toast(e.message, true); }); };
         }
         if (tab === 'import') {
-          B.innerHTML = card('Targets from Netdata', 'reads the go.d ping jobs: job name = location', '<div class="row"><input id="ndU" placeholder="http://netdata-host:19999" style="width:280px" value="' + esc(HW.ls('ndUrl') || '') + '"><button id="ndR">Read</button></div><div id="ndO" class="small muted mt12"></div>') +
+          var ro = function (id, cur) { return '<select id="' + id + '"><option value="">–</option>' + (D.roles || []).map(function (r) { return '<option' + (r.name === cur ? ' selected' : '') + '>' + esc(r.name) + '</option>'; }).join('') + '</select>'; };
+          var up = (D.roles || []).filter(function (r) { return r.upstream; })[0], own = (D.roles || []).filter(function (r) { return !r.upstream; })[0];
+          B.innerHTML = card('Targets from Netdata', 'reads the go.d ping jobs: job name = location',
+            '<div class="col gap12"><div class="row"><input id="ndU" placeholder="http://netdata-host:19999" style="width:280px" value="' + esc(HW.ls('ndUrl') || '') + '"></div>' +
+            '<div class="form"><div class="field"><label>Jobs ending with</label><input id="ndS" value="' + esc(HW.ls('ndSuf') || 'GW') + '"><span class="hint">e.g. "AMS GW" → location AMS. Empty = keep the job names</span></div>' +
+            '<div class="field"><label>… get the role</label>' + ro('ndRS', up ? up.name : '') + '</div><div class="field"><label>All other jobs get</label>' + ro('ndRO', own ? own.name : '') + '</div></div>' +
+            '<div class="small muted">Roles are set up under Targets → Roles.</div>' + HW.sw('ndUp', true, 'Update targets already in the list', 'their location and role change to the imported ones') +
+            '<div class="row"><button id="ndR">Read</button></div><div id="ndO" class="small muted"></div></div>') +
             card('History from Netdata', 'copies 1- and 5-minute history of your targets; existing data is kept', '<div class="row"><label class="small muted">Days</label><input type="number" id="hD" value="30"><button id="hGo">' + I('download') + 'Import history</button></div><div id="hS" class="small muted mt12"></div>');
-          $('ndR').onclick = function () { HW.ls('ndUrl', $('ndU').value); $('ndO').textContent = 'Reading…';
-            api('/api/import/targets', { method: 'POST', body: { url: $('ndU').value } }).then(function (x) {
-              var have = {}; D.targets.forEach(function (t) { have[t.host] = 1; }); var nw = x.targets.filter(function (t) { return !have[t.host]; });
-              $('ndO').innerHTML = 'Found ' + x.targets.length + ' IPs, ' + nw.length + ' new. ' + (nw.length ? '<button class="btn-s btn-p" id="ndA">Add ' + nw.length + ' to the list</button>' : '');
-              if ($('ndA')) $('ndA').onclick = function () { nw.forEach(function (t) { D.targets.push({ location: t.location, host: t.host, enabled: true }); }); dirty(); HW.toast(nw.length + ' targets added – Save to apply'); $('ndO').textContent = 'Added. Press Save.'; };
+          $('ndR').onclick = function () { HW.ls('ndUrl', $('ndU').value); HW.ls('ndSuf', $('ndS').value); $('ndO').textContent = 'Reading…';
+            api('/api/import/targets', { method: 'POST', body: { url: $('ndU').value, suffix: $('ndS').value, suffix_role: $('ndRS').value, other_role: $('ndRO').value } }).then(function (x) {
+              var have = {}; D.targets.forEach(function (t) { have[t.host] = t; });
+              var nw = x.targets.filter(function (t) { return !have[t.host]; }), ch = x.targets.filter(function (t) { var o = have[t.host]; return o && (o.location !== t.location || (o.role || '') !== t.role); });
+              var locs = {}; x.targets.forEach(function (t) { locs[t.location] = 1; });
+              $('ndO').innerHTML = 'Found ' + x.targets.length + ' IPs in ' + Object.keys(locs).length + ' locations: ' + nw.length + ' new, ' + ch.length + ' with a different location or role. ' +
+                (nw.length || ch.length ? '<button class="btn-s btn-p" id="ndA">Apply</button>' : '') +
+                '<div class="tw mt8" style="max-height:240px"><table class="table"><thead><tr><th>Location</th><th>Role</th><th>IP</th><th></th></tr></thead><tbody>' + x.targets.map(function (t) {
+                  return '<tr><td>' + esc(t.location) + '</td><td>' + esc(t.role || '–') + '</td><td class="mono small">' + esc(t.host) + '</td><td class="xs muted">' + (!have[t.host] ? 'new' : ch.indexOf(t) >= 0 ? 'changes' : '') + '</td></tr>'; }).join('') + '</tbody></table></div>';
+              if ($('ndA')) $('ndA').onclick = function () { var upd = $('ndUp').checked;
+                nw.forEach(function (t) { D.targets.push({ location: t.location, host: t.host, enabled: true, role: t.role }); });
+                if (upd) ch.forEach(function (t) { have[t.host].location = t.location; have[t.host].role = t.role; });
+                dirty(); HW.toast(nw.length + ' added' + (upd ? ', ' + ch.length + ' updated' : '') + ' – press Save'); $('ndO').textContent = 'Applied. Press Save.'; };
             }).catch(function (e) { $('ndO').textContent = e.message; }); };
           var poll = function () { api('/api/import/history').then(function (j) {
             $('hS').textContent = j.state === 'idle' ? '' : j.state === 'running' ? 'Importing… ' + j.done + ' of ' + (j.total || '?') + ' targets, ' + j.records + ' records' : j.state === 'done' ? 'Done: ' + j.records + ' records for ' + j.total + ' targets.' : 'Failed: ' + (j.error || '');
@@ -637,48 +661,79 @@
         if ($('tcpNow')) $('tcpNow').onclick = function () { api('/api/tcpcheck', { method: 'POST' }).then(function () { HW.toast('Checking – the Overview shows the result in a minute'); }); };
       }
       function targets() {
-        var tf = { q: '', locs: [] }, picked = {};
-        $('sbody').innerHTML = '<div class="card"><div class="hd"><h2>Targets</h2><span class="sub" id="tCount"></span><span class="grow"></span>' +
+        var tf = { q: '', locs: [], roles: [] }, picked = {};
+        D.roles = D.roles || [];
+        $('sbody').innerHTML = '<div class="card"><div class="hd"><h2>Roles</h2><span class="sub">split the targets of a location, e.g. your own equipment and the ISP\u2019s gateway in front of it</span><span class="grow"></span><button class="btn-s" id="rAdd">' + I('plus') + 'Add role</button></div>' +
+          '<div class="bd"><div id="rList"></div><div class="xs muted mt8">Mark the role of the ISP\u2019s gateway as <b>ISP edge</b>: when it is clean but the other targets of the location lose packets, the problem is past the ISP – the hub says so.</div></div></div>' +
+          '<div class="card"><div class="hd"><h2>Targets</h2><span class="sub" id="tCount"></span><span class="grow"></span>' +
           '<button class="btn-s" id="tAdd">' + I('plus') + 'Add</button><button class="btn-s" id="tPaste">Paste a list…</button></div><div class="bd col gap12">' +
-          '<div class="row"><div class="search" style="width:240px">' + I('search') + '<input id="tQ" placeholder="Filter"></div><div id="tL"></div><span class="grow"></span><span id="tBulk" class="row"></span></div>' +
-          '<div class="tw" style="max-height:60vh"><table class="table"><thead><tr><th class="w0"><input type="checkbox" id="tAll"></th><th class="w0">On</th><th>Location</th><th>IP or host name</th><th class="w0"></th></tr></thead><tbody id="tB"></tbody></table></div>' +
-          '<div class="xs muted">IPs with the same location are grouped on the Overview. Press Save (top right) to apply.</div></div></div>';
+          '<div class="row"><div class="search" style="width:240px">' + I('search') + '<input id="tQ" placeholder="Filter"></div><div id="tL"></div><div id="tR"></div><span class="grow"></span><span id="tBulk" class="row"></span></div>' +
+          '<div class="tw" style="max-height:60vh"><table class="table"><thead><tr><th class="w0"><input type="checkbox" id="tAll"></th><th class="w0">On</th><th>Location</th><th>Role</th><th>IP or host name</th><th class="w0"></th></tr></thead><tbody id="tB"></tbody></table></div>' +
+          '<div class="xs muted">IPs with the same location are one tile on the Overview, split by role. Press Save (top right) to apply.</div></div></div>';
+        var roleOpts = function (cur) { return '<option value="">–</option>' + D.roles.map(function (r) { return '<option' + (r.name === cur ? ' selected' : '') + '>' + esc(r.name) + '</option>'; }).join(''); };
+        function drawRoles() {
+          $('rList').innerHTML = D.roles.length ? '<div class="tw"><table class="table"><thead><tr><th>Name</th><th>ISP edge</th><th class="r">Targets</th><th class="w0"></th></tr></thead><tbody>' + D.roles.map(function (r, i) {
+            var n = D.targets.filter(function (t) { return t.role === r.name; }).length;
+            return '<tr><td><input data-rn="' + i + '" value="' + esc(r.name) + '" style="width:200px"></td><td><label class="switch"><input type="checkbox" data-ru="' + i + '"' + (r.upstream ? ' checked' : '') + '></label></td><td class="r">' + n + '</td>' +
+              '<td class="w0"><button class="btn-xs btn-g btn-i" data-rd="' + i + '" title="Remove">' + I('trash') + '</button></td></tr>'; }).join('') + '</tbody></table></div>' : '<div class="small muted">No roles: every target of a location counts the same.</div>';
+          [].forEach.call($('rList').querySelectorAll('[data-rn]'), function (e) { e.onchange = function () { var r = D.roles[+e.dataset.rn], old = r.name, nw = e.value.trim();
+            if (!nw) { e.value = old; return; } D.targets.forEach(function (t) { if (t.role === old) t.role = nw; }); r.name = nw; dirty(); drawRoles(); draw(); }; });
+          [].forEach.call($('rList').querySelectorAll('[data-ru]'), function (e) { e.onchange = function () { D.roles[+e.dataset.ru].upstream = e.checked; dirty(); }; });
+          [].forEach.call($('rList').querySelectorAll('[data-rd]'), function (e) { e.onclick = function () { var r = D.roles[+e.dataset.rd], n = D.targets.filter(function (t) { return t.role === r.name; }).length;
+            if (n && !confirm('Remove role "' + r.name + '"? ' + n + ' targets lose it.')) return;
+            D.targets.forEach(function (t) { if (t.role === r.name) t.role = ''; }); D.roles.splice(+e.dataset.rd, 1); dirty(); drawRoles(); draw(); }; });
+          if (rm) rm.options(D.roles.map(function (r) { return { value: r.name, label: r.name }; }).concat([{ value: '', label: '(no role)' }]));
+        }
+        $('rAdd').onclick = function () { var n = 'Role ' + (D.roles.length + 1); D.roles.push({ name: n, upstream: false }); dirty(); drawRoles(); var ins = $('rList').querySelectorAll('[data-rn]'); ins[ins.length - 1].select(); };
         var lm = HW.ms($('tL'), { options: [], label: 'Location', onChange: function (v) { tf.locs = v; draw(); } });
+        var rm = HW.ms($('tR'), { options: [], label: 'Role', onChange: function (v) { tf.roles = v; draw(); } });
         $('tQ').oninput = function () { tf.q = this.value.toLowerCase(); draw(); };
         function vis() { return D.targets.map(function (t, i) { return [t, i]; }).filter(function (x) { var t = x[0];
-          return (!tf.locs.length || tf.locs.indexOf(t.location) >= 0) && (!tf.q || (t.location + ' ' + t.host).toLowerCase().indexOf(tf.q) >= 0); }); }
+          return (!tf.locs.length || tf.locs.indexOf(t.location) >= 0) && (!tf.roles.length || tf.roles.indexOf(t.role || '') >= 0) && (!tf.q || (t.location + ' ' + t.host + ' ' + (t.role || '')).toLowerCase().indexOf(tf.q) >= 0); }); }
         function draw() {
           var seen = {}; lm.options(D.targets.filter(function (t) { if (seen[t.location]) return false; seen[t.location] = 1; return true; }).map(function (t) { return { value: t.location, label: t.location }; }));
           var v = vis();
           $('tCount').textContent = D.targets.length + ' targets' + (v.length !== D.targets.length ? ', ' + v.length + ' shown' : '');
           $('tB').innerHTML = v.map(function (x) { var t = x[0], i = x[1];
             return '<tr' + (picked[i] ? ' class="sel"' : '') + '><td class="w0"><input type="checkbox" data-pk="' + i + '"' + (picked[i] ? ' checked' : '') + '></td><td class="w0"><label class="switch"><input type="checkbox" data-i="' + i + '" data-k="enabled"' + (t.enabled ? ' checked' : '') + '></label></td>' +
-              '<td><input data-i="' + i + '" data-k="location" value="' + esc(t.location) + '" style="width:100%"></td><td><input data-i="' + i + '" data-k="host" value="' + esc(t.host) + '" style="width:100%" class="mono"></td>' +
-              '<td class="w0"><button class="btn-xs btn-g btn-i" data-rm="' + i + '" title="Remove">' + I('trash') + '</button></td></tr>'; }).join('') || '<tr><td colspan="5" class="empty">No targets.</td></tr>';
-          [].forEach.call($('tB').querySelectorAll('[data-k]'), function (e) { e.addEventListener(e.type === 'checkbox' ? 'change' : 'input', function () { D.targets[+e.dataset.i][e.dataset.k] = e.type === 'checkbox' ? e.checked : e.value.trim(); dirty(); }); });
-          [].forEach.call($('tB').querySelectorAll('[data-rm]'), function (b) { b.onclick = function () { D.targets.splice(+b.dataset.rm, 1); picked = {}; dirty(); draw(); }; });
+              '<td><input data-i="' + i + '" data-k="location" value="' + esc(t.location) + '" style="width:100%"></td><td><select data-i="' + i + '" data-k="role">' + roleOpts(t.role) + '</select></td>' +
+              '<td><input data-i="' + i + '" data-k="host" value="' + esc(t.host) + '" style="width:100%" class="mono"></td>' +
+              '<td class="w0"><button class="btn-xs btn-g btn-i" data-rm="' + i + '" title="Remove">' + I('trash') + '</button></td></tr>'; }).join('') || '<tr><td colspan="6" class="empty">No targets.</td></tr>';
+          [].forEach.call($('tB').querySelectorAll('[data-k]'), function (e) { e.addEventListener(e.type === 'checkbox' || e.tagName === 'SELECT' ? 'change' : 'input', function () { D.targets[+e.dataset.i][e.dataset.k] = e.type === 'checkbox' ? e.checked : e.value.trim(); dirty(); if (e.tagName === 'SELECT') drawRoles(); }); });
+          [].forEach.call($('tB').querySelectorAll('[data-rm]'), function (b) { b.onclick = function () { D.targets.splice(+b.dataset.rm, 1); picked = {}; dirty(); draw(); drawRoles(); }; });
           [].forEach.call($('tB').querySelectorAll('[data-pk]'), function (b) { b.onchange = function () { if (b.checked) picked[b.dataset.pk] = 1; else delete picked[b.dataset.pk]; draw(); }; });
           $('tAll').checked = v.length && v.every(function (x) { return picked[x[1]]; });
           $('tAll').onchange = function () { var on = this.checked; v.forEach(function (x) { if (on) picked[x[1]] = 1; else delete picked[x[1]]; }); draw(); };
           var n = Object.keys(picked).length;
-          $('tBulk').innerHTML = n ? '<span class="pill info">' + n + ' selected</span><button class="btn-s" data-b="on">Enable</button><button class="btn-s" data-b="off">Disable</button><button class="btn-s" data-b="loc">Set location…</button><button class="btn-s btn-d" data-b="rm">' + I('trash') + 'Remove</button>' : '';
+          $('tBulk').innerHTML = n ? '<span class="pill info">' + n + ' selected</span><button class="btn-s" data-b="on">Enable</button><button class="btn-s" data-b="off">Disable</button><button class="btn-s" data-b="loc">Set location…</button><button class="btn-s" data-b="role">Set role…</button><button class="btn-s btn-d" data-b="rm">' + I('trash') + 'Remove</button>' : '';
           [].forEach.call($('tBulk').querySelectorAll('[data-b]'), function (b) { b.onclick = function () {
             var idx = Object.keys(picked).map(Number).sort(function (a, c) { return c - a; });
+            if (b.dataset.b === 'role') {
+              HW.modal('Set role', '<div class="field"><label>Role for the ' + idx.length + ' selected targets</label><select id="srS">' + roleOpts('') + '</select></div>', '<button class="btn-g" id="srX">Cancel</button><button class="btn-p" id="srO">Set</button>');
+              $('srX').onclick = HW.closeModal; $('srO').onclick = function () { var r = $('srS').value; idx.forEach(function (i) { D.targets[i].role = r; }); HW.closeModal(); dirty(); draw(); drawRoles(); }; return; }
             if (b.dataset.b === 'loc') { var l = prompt('Location for the ' + idx.length + ' selected targets'); if (!l) return; idx.forEach(function (i) { D.targets[i].location = l.trim(); }); }
             else if (b.dataset.b === 'rm') { if (!confirm('Remove ' + idx.length + ' targets?')) return; idx.forEach(function (i) { D.targets.splice(i, 1); }); picked = {}; }
             else idx.forEach(function (i) { D.targets[i].enabled = b.dataset.b === 'on'; });
-            dirty(); draw(); }; });
+            dirty(); draw(); drawRoles(); }; });
         }
-        $('tAdd').onclick = function () { var l = D.targets[D.targets.length - 1]; D.targets.push({ location: l ? l.location : '', host: '', enabled: true }); dirty(); tf.q = ''; $('tQ').value = ''; draw();
+        $('tAdd').onclick = function () { var l = D.targets[D.targets.length - 1]; D.targets.push({ location: l ? l.location : '', host: '', enabled: true, role: l ? l.role : '' }); dirty(); tf.q = ''; $('tQ').value = ''; draw();
           var ins = $('tB').querySelectorAll('[data-k=host]'); if (ins.length) ins[ins.length - 1].focus(); };
         $('tPaste').onclick = function () {
-          HW.modal('Paste targets', '<p class="small muted">One per line: <code>Location, IP</code> or only <code>IP</code>. Tabs and semicolons work too. Duplicates are skipped.</p><textarea id="bulk" placeholder="Frankfurt, 192.0.2.10&#10;Frankfurt, 192.0.2.11&#10;198.51.100.7"></textarea>', '<button class="btn-g" id="bx">Cancel</button><button class="btn-p" id="bo">Add</button>');
+          HW.modal('Paste targets', '<p class="small muted">One per line: <code>Location, IP, Role</code> (role optional) or only <code>IP</code>. Tabs and semicolons work too. Roles that don\u2019t exist yet are created.</p>' +
+            '<textarea id="bulk" placeholder="AMS, 192.0.2.10, Own&#10;AMS, 192.0.2.1, ISP&#10;198.51.100.7"></textarea>' +
+            '<div class="mt12">' + HW.sw('bUpd', true, 'Update targets already in the list', 'their location and role change to what you paste') + '</div>', '<button class="btn-g" id="bx">Cancel</button><button class="btn-p" id="bo">Apply</button>');
           $('bx').onclick = HW.closeModal;
-          $('bo').onclick = function () { var n = 0; $('bulk').value.split(/\n/).forEach(function (l) { l = l.trim(); if (!l) return; var p = l.split(/[,;\t]/).map(function (x) { return x.trim(); });
-            var host = p.length > 1 ? p[1] : p[0]; if (!D.targets.some(function (t) { return t.host === host; })) { D.targets.push({ location: p[0], host: host, enabled: true }); n++; } });
-            HW.closeModal(); dirty(); draw(); HW.toast(n + ' added – press Save'); };
+          $('bo').onclick = function () {
+            var add = 0, upd = 0, upd_on = $('bUpd').checked, have = {}; D.targets.forEach(function (t) { have[t.host] = t; });
+            $('bulk').value.split(/\n/).forEach(function (l) { l = l.trim(); if (!l || l[0] === '#') return; var p = l.split(/[,;\t]/).map(function (x) { return x.trim(); });
+              var host = p.length > 1 ? p[1] : p[0], loc = p[0], role = p[2] || '';
+              if (role && !D.roles.some(function (r) { return r.name.toLowerCase() === role.toLowerCase(); })) D.roles.push({ name: role, upstream: /^(isp|gw|gateway|upstream)/i.test(role) });
+              if (role) role = D.roles.filter(function (r) { return r.name.toLowerCase() === role.toLowerCase(); })[0].name;
+              if (have[host]) { if (upd_on && p.length > 1) { have[host].location = loc; if (p.length > 2) have[host].role = role; upd++; } }
+              else { var t = { location: loc, host: host, enabled: true, role: role }; D.targets.push(t); have[host] = t; add++; } });
+            HW.closeModal(); dirty(); draw(); drawRoles(); HW.toast(add + ' added, ' + upd + ' updated – press Save'); };
         };
-        draw();
+        draw(); drawRoles();
       }
       show();
     }).catch(fail);
