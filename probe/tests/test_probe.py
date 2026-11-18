@@ -124,6 +124,19 @@ class ConfigTest(unittest.TestCase):
         with self.assertRaises(config.ConfigError):
             config.validate({"roles": [{"name": "FX"}, {"name": "fx"}]})
 
+    def test_groups(self):
+        # location and name are optional; the role is the group when there is no location
+        c = config.validate({"targets": [{"name": "Cloudflare DNS", "host": "1.1.1.1", "role": "EXTERNAL"},
+                                         {"location": "AMS", "host": "192.0.2.1", "role": "ISP"},
+                                         {"location": "AMS", "host": "192.0.2.2", "role": "FX"},
+                                         {"host": "192.0.2.3"}]})
+        t = c["targets"]
+        self.assertEqual(t[0]["location"], "")
+        self.assertEqual([config.group(x) for x in t], ["EXTERNAL", "AMS · ISP", "AMS · FX", "192.0.2.3"])
+        self.assertEqual([config.place(x) for x in t], ["EXTERNAL", "AMS", "AMS", "192.0.2.3"])
+        self.assertEqual(config.label(t[0]), "Cloudflare DNS (EXTERNAL)")
+        self.assertEqual([r["name"] for r in config.validate({})["roles"]], ["FX", "ISP", "EXTERNAL"])
+
     def test_limits(self):
         with self.assertRaises(config.ConfigError):
             config.validate({"ping": {"interval_ms": 1000, "timeout_ms": 2000}})
@@ -272,3 +285,22 @@ class MedianTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ImportTest(unittest.TestCase):
+    """Netdata jobs: "AMS GW" -> location AMS, role ISP; "AMS" -> AMS, FX; "Cloudflare DNS" -> no location, EXTERNAL."""
+    def test_pairs(self):
+        import web, netdata_import
+        found = [{"location": "AMS GW", "host": "192.0.2.1"}, {"location": "AMS", "host": "192.0.2.2"},
+                 {"location": "Cloudflare DNS", "host": "1.1.1.1"}]
+        class H:
+            def _body(self):
+                return {"suffix": "GW", "suffix_role": "ISP", "other_role": "FX", "lone_role": "EXTERNAL"}
+        old = netdata_import.targets
+        netdata_import.targets = lambda url: found
+        try:
+            out = web.api_import_targets(H(), {}, None)["targets"]
+        finally:
+            netdata_import.targets = old
+        self.assertEqual([(t["name"], t["location"], t["role"]) for t in out],
+                         [("", "AMS", "ISP"), ("", "AMS", "FX"), ("Cloudflare DNS", "", "EXTERNAL")])

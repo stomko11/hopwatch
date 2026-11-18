@@ -6,6 +6,8 @@ import subprocess
 import threading
 import time
 import urllib.request
+
+from config import group as _group
 from datetime import datetime, timezone
 
 log = logging.getLogger("mtr")
@@ -118,7 +120,7 @@ class MtrRunner:
 
     def request(self, host, mode="icmp", port=None, cycles=None, trig="manual", reason=None, schedule=None) -> int:
         c = self.cfg.get()
-        locs = {t["host"]: t["location"] for t in c["targets"]}
+        locs = {t["host"]: _group(t) for t in c["targets"]}
         if host not in locs:
             raise ValueError("MTR runs only to configured targets")
         if mode == "tcp_if_open":

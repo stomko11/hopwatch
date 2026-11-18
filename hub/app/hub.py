@@ -104,8 +104,9 @@ def align(per_probe):
             continue
         for s in d["series"]:
             h = s["host"]
-            # a role keeps its own name everywhere: "AMS · ISP" and "AMS · Own" are separate
-            locs.setdefault(h, s["location"] + (" · " + s["role"] if s.get("role") else ""))
+            # a role keeps its own name everywhere: "AMS · ISP" and "AMS · FX" are separate
+            # (probes before 0.2.5 send no "group")
+            locs.setdefault(h, s.get("group") or (s["location"] + (" · " + s["role"] if s.get("role") else "")))
             dst = grid.setdefault(h, {}).setdefault(pid, {})
             for t, avg, loss, jit, _mx in s["points"]:
                 if loss is None and avg is None:

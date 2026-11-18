@@ -212,7 +212,7 @@
       var locs = {}, order = [];
       if (live) {
         ps.forEach(function (p) { (p.targets || []).forEach(function (t) {
-          var key = t.location + (t.role ? ' · ' + t.role : '');
+          var key = t.group || (t.location + (t.role ? ' · ' + t.role : ''));
           var L = locs[key]; if (!L) { L = locs[key] = { hosts: {}, by: {} }; order.push(key); }
           L.hosts[t.host] = 1; var c = L.by[p.id] = L.by[p.id] || { st: 'disabled', avg: [], loss: 0 };
           if (RANK[t.status] > RANK[c.st]) c.st = t.status; if (t.avg != null) c.avg.push(t.avg); c.loss = Math.max(c.loss, t.loss || 0); }); });

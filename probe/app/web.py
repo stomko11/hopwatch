@@ -11,7 +11,7 @@ import urllib.parse
 import evidence
 import httpbase
 import netdata_import
-from config import VERSION, ConfigError
+from config import VERSION, ConfigError, group as _group, place as _place
 
 log = logging.getLogger("web")
 STATIC = os.path.join(os.path.dirname(__file__), "static")
@@ -70,20 +70,20 @@ def api_series(h, q, _):
     points = int(q.get("points") or 300)
     targets = [t for t in c["targets"]]
     hosts, locs = set(_list(q, "host")), set(_list(q, "location"))
-    if hosts or locs:      # a target is shown when its IP or its location is picked
-        targets = [t for t in targets if t["host"] in hosts or t["location"] in locs]
+    if hosts or locs:      # a target is shown when its IP or its place (location, else role) is picked
+        targets = [t for t in targets if t["host"] in hosts or _place(t) in locs or _group(t) in locs]
     with a.pinger.lock:
         live = {k: list(v) for k, v in a.pinger.minutes.items()}
     data, tier, step = a.store.series([t["host"] for t in targets], int(t0), int(t1), points, c["retention"], now, live)
     group = q.get("group") or "host"
     out = []
     if group in ("location", "role"):
-        # "role" keeps the roles of a location apart: "AMS · ISP" and "AMS · Own" are never averaged together
+        # "role" keeps the roles of a location apart: "AMS · ISP" and "AMS · FX" are never averaged together
         locs, meta = {}, {}
         for t in targets:
-            key = t["location"] if group == "location" or not t.get("role") else f'{t["location"]} · {t["role"]}'
+            key = _place(t) if group == "location" else _group(t)
             locs.setdefault(key, []).append(t["host"])
-            meta[key] = (t["location"], (t.get("role") or "") if group == "role" else "")
+            meta[key] = (_place(t), (t.get("role") or "") if group == "role" else "")
         for loc, hosts in locs.items():
             buckets = []
             for i in range(len(data[hosts[0]])):
@@ -98,12 +98,13 @@ def api_series(h, q, _):
                 jits = [v["jitter"] for v in vals if v["jitter"] is not None]
                 buckets.append([ts, round(sum(avgs) / len(avgs), 2) if avgs else None, round(100.0 * lost / sent, 2),
                                 round(sum(jits) / len(jits), 2) if jits else None, max(v["max"] or 0 for v in vals) or None])
-            out.append({"name": loc, "location": meta[loc][0], "role": meta[loc][1], "hosts": hosts, "points": buckets})
+            out.append({"name": loc, "location": meta[loc][0], "role": meta[loc][1], "group": loc, "hosts": hosts, "points": buckets})
     else:
         for t in targets:
             pts = [[ts, v["avg"], v["loss"], v["jitter"], v["max"]] if v else [ts, None, None, None, None]
                    for ts, v in data[t["host"]]]
-            out.append({"name": t["host"], "location": t["location"], "role": t.get("role") or "", "host": t["host"], "points": pts})
+            out.append({"name": t["host"], "label": t.get("name") or "", "location": _place(t), "dc": t["location"],
+                        "role": t.get("role") or "", "group": _group(t), "host": t["host"], "points": pts})
     return {"tier": tier, "step": step, "from": t0, "to": t1, "columns": ["t", "avg", "loss", "jitter", "max"], "series": out}
 
 
@@ -170,7 +171,7 @@ def _window(h, q, max_points=20000):
     targets = c["targets"]
     hosts, locs = set(_list(q, "host")), set(_list(q, "location"))
     if hosts or locs:
-        targets = [t for t in targets if t["host"] in hosts or t["location"] in locs]
+        targets = [t for t in targets if t["host"] in hosts or _place(t) in locs or _group(t) in locs]
         if not targets:
             raise ValueError("none of the picked targets or locations exist (any more)")
     with a.pinger.lock:
@@ -247,16 +248,22 @@ def api_tcpcheck(h, q, _):
 
 def api_import_targets(h, q, _):
     """Targets of a Netdata agent. Optional: jobs whose name ends with `suffix` (e.g. "GW") get
-    `suffix_role` and lose the suffix, so "AMS GW" becomes location "AMS" with role "ISP";
-    all other jobs get `other_role`."""
+    `suffix_role` and lose the suffix, so "AMS GW" becomes location "AMS" with role "ISP"; the
+    jobs of those locations get `other_role`. A job with no such pair (e.g. "Cloudflare DNS") is
+    not in a location: the job name becomes the target's name and it gets `lone_role`."""
     b = h._body()
     suffix = str(b.get("suffix") or "").strip()
+    found = netdata_import.targets(b.get("url"))
+    sfx = " " + suffix.lower()
+    paired = {t["location"][: -len(sfx)].strip().lower() for t in found if suffix and t["location"].lower().endswith(sfx)}
     out = []
-    for t in netdata_import.targets(b.get("url")):
-        loc, role = t["location"], str(b.get("other_role") or "")
-        if suffix and loc.lower().endswith(" " + suffix.lower()):
-            loc, role = loc[: -len(suffix) - 1].strip(), str(b.get("suffix_role") or "")
-        out.append({"location": loc, "host": t["host"], "role": role})
+    for t in found:
+        job, name, role = t["location"], "", str(b.get("other_role") or "")
+        if suffix and job.lower().endswith(sfx):
+            job, role = job[: -len(sfx)].strip(), str(b.get("suffix_role") or "")
+        elif suffix and job.lower() not in paired:
+            job, name, role = "", job, str(b.get("lone_role") or "")
+        out.append({"name": name, "location": job, "host": t["host"], "role": role})
     return {"targets": out}
 
 

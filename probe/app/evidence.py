@@ -6,7 +6,7 @@ import time
 import zipfile
 from datetime import datetime, timezone
 
-from config import VERSION
+from config import VERSION, group as _group
 
 
 def iso(t):
@@ -32,13 +32,14 @@ def series_csv(data, targets, step) -> str:
     """data: {host: [(t, acc or None)]} from Store.series."""
     loc = {t["host"]: t["location"] for t in targets}
     role = {t["host"]: t.get("role") or "" for t in targets}
+    name = {t["host"]: t.get("name") or "" for t in targets}
     out = io.StringIO()
     w = csv.writer(out)
-    w.writerow(["time_utc", "location", "role", "target", "seconds", "sent", "lost", "loss_pct", "avg_ms", "min_ms", "max_ms", "jitter_ms"])
+    w.writerow(["time_utc", "location", "role", "name", "target", "seconds", "sent", "lost", "loss_pct", "avg_ms", "min_ms", "max_ms", "jitter_ms"])
     for host, rows in data.items():
         for t, v in rows:
             if v:
-                w.writerow([iso(t), loc.get(host, ""), role.get(host, ""), host, step, v["sent"], v["lost"], v["loss"],
+                w.writerow([iso(t), loc.get(host, ""), role.get(host, ""), name.get(host, ""), host, step, v["sent"], v["lost"], v["loss"],
                             v["avg"], v["min"], v["max"], v["jitter"]])
     return out.getvalue()
 
@@ -68,7 +69,7 @@ def runs_index_csv(runs) -> str:
 
 def summary(data, targets):
     """Per target: totals over the whole window."""
-    loc = {t["host"]: t["location"] for t in targets}
+    loc = {t["host"]: _group(t) + (f' {t["name"]}' if t.get("name") else "") for t in targets}
     rows = []
     for host, buckets in data.items():
         sent = lost = 0
@@ -101,9 +102,9 @@ def pack(site, public_ip, t0, t1, targets, data, step, events, runs, note="") ->
     if note:
         lines += ["", "Note: " + note]
     lines += ["", "Per target over the whole window", ""]
-    lines.append(f"{'Location':<22} {'Target':<40} {'Sent':>7} {'Lost':>6} {'Loss%':>6} {'Avg ms':>8} {'Max ms':>8}")
+    lines.append(f"{'Group':<30} {'Target':<40} {'Sent':>7} {'Lost':>6} {'Loss%':>6} {'Avg ms':>8} {'Max ms':>8}")
     for r in rows:
-        lines.append(f"{r['location'][:22]:<22} {r['host'][:40]:<40} {r['sent']:>7} {r['lost']:>6} "
+        lines.append(f"{r['location'][:30]:<30} {r['host'][:40]:<40} {r['sent']:>7} {r['lost']:>6} "
                      f"{'' if r['loss'] is None else format(r['loss'], '.2f'):>6} "
                      f"{'' if r['avg'] is None else r['avg']:>8} {'' if r['max'] is None else r['max']:>8}")
     status = [e for e in events if e["kind"] == "status"]

@@ -92,7 +92,7 @@
   function tcpOk(t) { return t && t.tcp && (t.tcp.state === 'open' || t.tcp.state === 'refused'); }
   function targetOpts(st, onlyOn) {
     return (st || S.status).targets.filter(function (t) { return !onlyOn || t.enabled; }).map(function (t) {
-      return { value: t.host, label: t.host, group: t.location, hint: tcpOk(t) ? 'TCP ' + t.tcp.port : '' }; });
+      return { value: t.host, label: t.name ? t.host + ' · ' + t.name : t.host, group: t.group || t.location, hint: tcpOk(t) ? 'TCP ' + t.tcp.port : '' }; });
   }
   function locOpts(st) { var seen = {}; return (st || S.status).targets.filter(function (t) { if (seen[t.location]) return false; seen[t.location] = 1; return true; }).map(function (t) { return { value: t.location, label: t.location }; }); }
   function tcpPort() { var t = ((S.status || {}).targets || []).filter(function (x) { return x.tcp; })[0]; return t ? t.tcp.port : 443; }
@@ -175,7 +175,7 @@
       var html = order.filter(function (l) {
         if (f.locs.length && f.locs.indexOf(l) < 0) return false;
         if (f.only === 'bad' && RANK[worstOf(locs[l])] < 2) return false;
-        return !q || l.toLowerCase().indexOf(q) >= 0 || locs[l].some(function (t) { return t.host.indexOf(q) >= 0; });
+        return !q || l.toLowerCase().indexOf(q) >= 0 || locs[l].some(function (t) { return (t.host + ' ' + (t.name || '')).toLowerCase().indexOf(q) >= 0; });
       }).sort(function (a, b) { return RANK[worstOf(locs[b])] - RANK[worstOf(locs[a])] || a.localeCompare(b); }).map(function (l) {
         var ts = locs[l], w = worstOf(ts), hosts = ts.filter(function (t) { return t.enabled; }).map(function (t) { return t.host; });
         return '<div class="tile st-' + w + '"><div class="th"><span class="dot ' + w + '"></span><b class="ell">' + esc(l) + '</b>' +
@@ -184,10 +184,10 @@
           '<button class="btn-xs" data-lm="' + esc(JSON.stringify(hosts)) + '">' + I('route') + 'MTR</button></div>' +
           byRole(ts, st.roles).map(function (t, k, arr) {
             var sp = spark[t.host] || { v: [], l: [] };
-            var rh = (t.role || arr.some(function (x) { return x.role; })) && (k === 0 || arr[k - 1].role !== t.role)
+            var rh = t.dc && (t.role || arr.some(function (x) { return x.role; })) && (k === 0 || arr[k - 1].role !== t.role)
               ? '<div class="rolehd">' + esc(t.role || 'no role') + (roleUp(st.roles, t.role) ? ' <span class="tag">ISP edge</span>' : '') + '</div>' : '';
             var ds = live ? t.status : t.live;
-            return rh + '<div class="ipr"><div class="ip"><span class="dot ' + ds + (ds === 'ok' ? ' live' : '') + '" title="now: ' + (STATUS[ds] || ds) + '"></span><span class="ell" title="' + esc(t.host) + '">' + esc(t.host) + '</span>' + (tcpOk(t) ? '<span class="tag tcp" title="TCP ' + t.tcp.port + ' answers: TCP MTR possible">TCP</span>' : '') + '</div>' +
+            return rh + '<div class="ipr"><div class="ip"><span class="dot ' + ds + (ds === 'ok' ? ' live' : '') + '" title="now: ' + (STATUS[ds] || ds) + '"></span><span class="ell' + (t.name ? ' nm' : '') + '" title="' + esc(t.name ? t.name + ' · ' + t.host : t.host) + '">' + (t.name ? esc(t.name) + '<span class="xs faint">' + esc(t.host) + '</span>' : esc(t.host)) + '</span>' + (tcpOk(t) ? '<span class="tag tcp" title="TCP ' + t.tcp.port + ' answers: TCP MTR possible">TCP</span>' : '') + '</div>' +
               '<div>' + HW.spark(sp.v, sp.l, t.status === 'ok' ? 'var(--accent)' : 'var(--' + (t.status === 'warn' ? 'warn' : 'bad') + ')') + '</div>' +
               '<div class="r">' + (t.status === 'down' ? '<span class="down">down</span>' : t.avg == null ? '<span class="faint">–</span>' : HW.fnum(t.avg) + '<span class="faint"> ms</span>') + '</div>' +
               '<div class="r ' + (t.loss > 0 ? (RANK[t.status] >= 3 ? 'bad' : 'warn') : 'faint') + '"' + (!live && t.maxloss ? ' title="average loss; worst moment ' + HW.fnum(t.maxloss, 0) + '%"' : '') + '>' + (t.loss == null ? '–' : HW.fnum(t.loss, t.loss > 0 && t.loss < 1 ? 1 : 0) + '%') + '</div>' +
@@ -629,26 +629,28 @@
         }
         if (tab === 'import') {
           var ro = function (id, cur) { return '<select id="' + id + '"><option value="">–</option>' + (D.roles || []).map(function (r) { return '<option' + (r.name === cur ? ' selected' : '') + '>' + esc(r.name) + '</option>'; }).join('') + '</select>'; };
-          var up = (D.roles || []).filter(function (r) { return r.upstream; })[0], own = (D.roles || []).filter(function (r) { return !r.upstream; })[0];
+          var up = (D.roles || []).filter(function (r) { return r.upstream; })[0], own = (D.roles || []).filter(function (r) { return !r.upstream; })[0],
+            ext = (D.roles || []).filter(function (r) { return /^ext/i.test(r.name); })[0];
           B.innerHTML = card('Targets from Netdata', 'reads the go.d ping jobs: job name = location',
             '<div class="col gap12"><div class="row"><input id="ndU" placeholder="http://netdata-host:19999" style="width:280px" value="' + esc(HW.ls('ndUrl') || '') + '"></div>' +
             '<div class="form"><div class="field"><label>Jobs ending with</label><input id="ndS" value="' + esc(HW.ls('ndSuf') || 'GW') + '"><span class="hint">e.g. "AMS GW" → location AMS. Empty = keep the job names</span></div>' +
-            '<div class="field"><label>… get the role</label>' + ro('ndRS', up ? up.name : '') + '</div><div class="field"><label>All other jobs get</label>' + ro('ndRO', own ? own.name : '') + '</div></div>' +
-            '<div class="small muted">Roles are set up under Targets → Roles.</div>' + HW.sw('ndUp', true, 'Update targets already in the list', 'their location and role change to the imported ones') +
+            '<div class="field"><label>… get the role</label>' + ro('ndRS', up ? up.name : '') + '</div><div class="field"><label>Other jobs of those locations get</label>' + ro('ndRO', own ? own.name : '') + '</div>' +
+            '<div class="field"><label>Jobs with no such pair get</label>' + ro('ndRL', ext ? ext.name : '') + '<span class="hint">e.g. "Cloudflare DNS": no location, the job name becomes its name</span></div></div>' +
+            '<div class="small muted">Roles are set up under Targets → Roles.</div>' + HW.sw('ndUp', true, 'Update targets already in the list', 'their name, location and role change to the imported ones') +
             '<div class="row"><button id="ndR">Read</button></div><div id="ndO" class="small muted"></div></div>') +
             card('History from Netdata', 'copies 1- and 5-minute history of your targets; existing data is kept', '<div class="row"><label class="small muted">Days</label><input type="number" id="hD" value="30"><button id="hGo">' + I('download') + 'Import history</button></div><div id="hS" class="small muted mt12"></div>');
           $('ndR').onclick = function () { HW.ls('ndUrl', $('ndU').value); HW.ls('ndSuf', $('ndS').value); $('ndO').textContent = 'Reading…';
-            api('/api/import/targets', { method: 'POST', body: { url: $('ndU').value, suffix: $('ndS').value, suffix_role: $('ndRS').value, other_role: $('ndRO').value } }).then(function (x) {
+            api('/api/import/targets', { method: 'POST', body: { url: $('ndU').value, suffix: $('ndS').value, suffix_role: $('ndRS').value, other_role: $('ndRO').value, lone_role: $('ndRL').value } }).then(function (x) {
               var have = {}; D.targets.forEach(function (t) { have[t.host] = t; });
-              var nw = x.targets.filter(function (t) { return !have[t.host]; }), ch = x.targets.filter(function (t) { var o = have[t.host]; return o && (o.location !== t.location || (o.role || '') !== t.role); });
-              var locs = {}; x.targets.forEach(function (t) { locs[t.location] = 1; });
-              $('ndO').innerHTML = 'Found ' + x.targets.length + ' IPs in ' + Object.keys(locs).length + ' locations: ' + nw.length + ' new, ' + ch.length + ' with a different location or role. ' +
+              var nw = x.targets.filter(function (t) { return !have[t.host]; }), ch = x.targets.filter(function (t) { var o = have[t.host]; return o && ((o.name || '') !== t.name || o.location !== t.location || (o.role || '') !== t.role); });
+              var locs = {}; x.targets.forEach(function (t) { if (t.location) locs[t.location] = 1; });
+              $('ndO').innerHTML = 'Found ' + x.targets.length + ' IPs in ' + Object.keys(locs).length + ' locations: ' + nw.length + ' new, ' + ch.length + ' with a different name, location or role. ' +
                 (nw.length || ch.length ? '<button class="btn-s btn-p" id="ndA">Apply</button>' : '') +
-                '<div class="tw mt8" style="max-height:240px"><table class="table"><thead><tr><th>Location</th><th>Role</th><th>IP</th><th></th></tr></thead><tbody>' + x.targets.map(function (t) {
-                  return '<tr><td>' + esc(t.location) + '</td><td>' + esc(t.role || '–') + '</td><td class="mono small">' + esc(t.host) + '</td><td class="xs muted">' + (!have[t.host] ? 'new' : ch.indexOf(t) >= 0 ? 'changes' : '') + '</td></tr>'; }).join('') + '</tbody></table></div>';
+                '<div class="tw mt8" style="max-height:240px"><table class="table"><thead><tr><th>Name</th><th>Location</th><th>Role</th><th>IP</th><th></th></tr></thead><tbody>' + x.targets.map(function (t) {
+                  return '<tr><td>' + esc(t.name || '–') + '</td><td>' + esc(t.location || '–') + '</td><td>' + esc(t.role || '–') + '</td><td class="mono small">' + esc(t.host) + '</td><td class="xs muted">' + (!have[t.host] ? 'new' : ch.indexOf(t) >= 0 ? 'changes' : '') + '</td></tr>'; }).join('') + '</tbody></table></div>';
               if ($('ndA')) $('ndA').onclick = function () { var upd = $('ndUp').checked;
-                nw.forEach(function (t) { D.targets.push({ location: t.location, host: t.host, enabled: true, role: t.role }); });
-                if (upd) ch.forEach(function (t) { have[t.host].location = t.location; have[t.host].role = t.role; });
+                nw.forEach(function (t) { D.targets.push({ name: t.name, location: t.location, host: t.host, enabled: true, role: t.role }); });
+                if (upd) ch.forEach(function (t) { have[t.host].name = t.name; have[t.host].location = t.location; have[t.host].role = t.role; });
                 dirty(); HW.toast(nw.length + ' added' + (upd ? ', ' + ch.length + ' updated' : '') + ' – press Save'); $('ndO').textContent = 'Applied. Press Save.'; };
             }).catch(function (e) { $('ndO').textContent = e.message; }); };
           var poll = function () { api('/api/import/history').then(function (j) {
@@ -663,19 +665,19 @@
       function targets() {
         var tf = { q: '', locs: [], roles: [] }, picked = {};
         D.roles = D.roles || [];
-        $('sbody').innerHTML = '<div class="card"><div class="hd"><h2>Roles</h2><span class="sub">split the targets of a location, e.g. your own equipment and the ISP\u2019s gateway in front of it</span><span class="grow"></span><button class="btn-s" id="rAdd">' + I('plus') + 'Add role</button></div>' +
+        $('sbody').innerHTML = '<div class="card"><div class="hd"><h2>Roles</h2><span class="sub">groups of targets, e.g. FX, ISP, EXTERNAL; in a location each role is its own group</span><span class="grow"></span><button class="btn-s" id="rAdd">' + I('plus') + 'Add role</button></div>' +
           '<div class="bd"><div id="rList"></div><div class="xs muted mt8">Mark the role of the ISP\u2019s gateway as <b>ISP edge</b>: when it is clean but the other targets of the location lose packets, the problem is past the ISP – the hub says so.</div></div></div>' +
           '<div class="card"><div class="hd"><h2>Targets</h2><span class="sub" id="tCount"></span><span class="grow"></span>' +
           '<button class="btn-s" id="tAdd">' + I('plus') + 'Add</button><button class="btn-s" id="tPaste">Paste a list…</button></div><div class="bd col gap12">' +
           '<div class="row"><div class="search" style="width:240px">' + I('search') + '<input id="tQ" placeholder="Filter"></div><div id="tL"></div><div id="tR"></div><span class="grow"></span><span id="tBulk" class="row"></span></div>' +
-          '<div class="tw" style="max-height:60vh"><table class="table"><thead><tr><th class="w0"><input type="checkbox" id="tAll"></th><th class="w0">On</th><th>Location</th><th>Role</th><th>IP or host name</th><th class="w0"></th></tr></thead><tbody id="tB"></tbody></table></div>' +
-          '<div class="xs muted">IPs with the same location are one tile on the Overview, split by role. Press Save (top right) to apply.</div></div></div>';
+          '<div class="tw" style="max-height:60vh"><table class="table"><thead><tr><th class="w0"><input type="checkbox" id="tAll"></th><th class="w0">On</th><th>Name</th><th>Location</th><th>IP or host name</th><th>Role</th><th class="w0"></th></tr></thead><tbody id="tB"></tbody></table></div>' +
+          '<div class="xs muted">Name and location are optional. IPs with the same location are one tile on the Overview, split by role (AMS · ISP, AMS · FX); IPs without a location are grouped by role. Press Save (top right) to apply.</div></div></div>';
         var roleOpts = function (cur) { return '<option value="">–</option>' + D.roles.map(function (r) { return '<option' + (r.name === cur ? ' selected' : '') + '>' + esc(r.name) + '</option>'; }).join(''); };
         function drawRoles() {
           $('rList').innerHTML = D.roles.length ? '<div class="tw"><table class="table"><thead><tr><th>Name</th><th>ISP edge</th><th class="r">Targets</th><th class="w0"></th></tr></thead><tbody>' + D.roles.map(function (r, i) {
             var n = D.targets.filter(function (t) { return t.role === r.name; }).length;
             return '<tr><td><input data-rn="' + i + '" value="' + esc(r.name) + '" style="width:200px"></td><td><label class="switch"><input type="checkbox" data-ru="' + i + '"' + (r.upstream ? ' checked' : '') + '></label></td><td class="r">' + n + '</td>' +
-              '<td class="w0"><button class="btn-xs btn-g btn-i" data-rd="' + i + '" title="Remove">' + I('trash') + '</button></td></tr>'; }).join('') + '</tbody></table></div>' : '<div class="small muted">No roles: every target of a location counts the same.</div>';
+              '<td class="w0"><button class="btn-xs btn-g btn-i" data-rd="' + i + '" title="Remove">' + I('trash') + '</button></td></tr>'; }).join('') + '</tbody></table></div>' : '<div class="small muted">No roles: targets are grouped by location only.</div>';
           [].forEach.call($('rList').querySelectorAll('[data-rn]'), function (e) { e.onchange = function () { var r = D.roles[+e.dataset.rn], old = r.name, nw = e.value.trim();
             if (!nw) { e.value = old; return; } D.targets.forEach(function (t) { if (t.role === old) t.role = nw; }); r.name = nw; dirty(); drawRoles(); draw(); }; });
           [].forEach.call($('rList').querySelectorAll('[data-ru]'), function (e) { e.onchange = function () { D.roles[+e.dataset.ru].upstream = e.checked; dirty(); }; });
@@ -689,16 +691,16 @@
         var rm = HW.ms($('tR'), { options: [], label: 'Role', onChange: function (v) { tf.roles = v; draw(); } });
         $('tQ').oninput = function () { tf.q = this.value.toLowerCase(); draw(); };
         function vis() { return D.targets.map(function (t, i) { return [t, i]; }).filter(function (x) { var t = x[0];
-          return (!tf.locs.length || tf.locs.indexOf(t.location) >= 0) && (!tf.roles.length || tf.roles.indexOf(t.role || '') >= 0) && (!tf.q || (t.location + ' ' + t.host + ' ' + (t.role || '')).toLowerCase().indexOf(tf.q) >= 0); }); }
+          return (!tf.locs.length || tf.locs.indexOf(t.location || '') >= 0) && (!tf.roles.length || tf.roles.indexOf(t.role || '') >= 0) && (!tf.q || ((t.name || '') + ' ' + t.location + ' ' + t.host + ' ' + (t.role || '')).toLowerCase().indexOf(tf.q) >= 0); }); }
         function draw() {
-          var seen = {}; lm.options(D.targets.filter(function (t) { if (seen[t.location]) return false; seen[t.location] = 1; return true; }).map(function (t) { return { value: t.location, label: t.location }; }));
+          var seen = {}; lm.options(D.targets.filter(function (t) { if (seen[t.location]) return false; seen[t.location] = 1; return true; }).map(function (t) { return { value: t.location || '', label: t.location || '(no location)' }; }));
           var v = vis();
           $('tCount').textContent = D.targets.length + ' targets' + (v.length !== D.targets.length ? ', ' + v.length + ' shown' : '');
           $('tB').innerHTML = v.map(function (x) { var t = x[0], i = x[1];
             return '<tr' + (picked[i] ? ' class="sel"' : '') + '><td class="w0"><input type="checkbox" data-pk="' + i + '"' + (picked[i] ? ' checked' : '') + '></td><td class="w0"><label class="switch"><input type="checkbox" data-i="' + i + '" data-k="enabled"' + (t.enabled ? ' checked' : '') + '></label></td>' +
-              '<td><input data-i="' + i + '" data-k="location" value="' + esc(t.location) + '" style="width:100%"></td><td><select data-i="' + i + '" data-k="role">' + roleOpts(t.role) + '</select></td>' +
-              '<td><input data-i="' + i + '" data-k="host" value="' + esc(t.host) + '" style="width:100%" class="mono"></td>' +
-              '<td class="w0"><button class="btn-xs btn-g btn-i" data-rm="' + i + '" title="Remove">' + I('trash') + '</button></td></tr>'; }).join('') || '<tr><td colspan="6" class="empty">No targets.</td></tr>';
+              '<td><input data-i="' + i + '" data-k="name" value="' + esc(t.name || '') + '" placeholder="–" style="width:100%"></td><td><input data-i="' + i + '" data-k="location" value="' + esc(t.location) + '" placeholder="–" style="width:100%"></td>' +
+              '<td><input data-i="' + i + '" data-k="host" value="' + esc(t.host) + '" style="width:100%" class="mono"></td><td><select data-i="' + i + '" data-k="role">' + roleOpts(t.role) + '</select></td>' +
+              '<td class="w0"><button class="btn-xs btn-g btn-i" data-rm="' + i + '" title="Remove">' + I('trash') + '</button></td></tr>'; }).join('') || '<tr><td colspan="7" class="empty">No targets.</td></tr>';
           [].forEach.call($('tB').querySelectorAll('[data-k]'), function (e) { e.addEventListener(e.type === 'checkbox' || e.tagName === 'SELECT' ? 'change' : 'input', function () { D.targets[+e.dataset.i][e.dataset.k] = e.type === 'checkbox' ? e.checked : e.value.trim(); dirty(); if (e.tagName === 'SELECT') drawRoles(); }); });
           [].forEach.call($('tB').querySelectorAll('[data-rm]'), function (b) { b.onclick = function () { D.targets.splice(+b.dataset.rm, 1); picked = {}; dirty(); draw(); drawRoles(); }; });
           [].forEach.call($('tB').querySelectorAll('[data-pk]'), function (b) { b.onchange = function () { if (b.checked) picked[b.dataset.pk] = 1; else delete picked[b.dataset.pk]; draw(); }; });
@@ -711,26 +713,30 @@
             if (b.dataset.b === 'role') {
               HW.modal('Set role', '<div class="field"><label>Role for the ' + idx.length + ' selected targets</label><select id="srS">' + roleOpts('') + '</select></div>', '<button class="btn-g" id="srX">Cancel</button><button class="btn-p" id="srO">Set</button>');
               $('srX').onclick = HW.closeModal; $('srO').onclick = function () { var r = $('srS').value; idx.forEach(function (i) { D.targets[i].role = r; }); HW.closeModal(); dirty(); draw(); drawRoles(); }; return; }
-            if (b.dataset.b === 'loc') { var l = prompt('Location for the ' + idx.length + ' selected targets'); if (!l) return; idx.forEach(function (i) { D.targets[i].location = l.trim(); }); }
+            if (b.dataset.b === 'loc') { var l = prompt('Location for the ' + idx.length + ' selected targets (empty = none)'); if (l == null) return; idx.forEach(function (i) { D.targets[i].location = l.trim() === '-' ? '' : l.trim(); }); }
             else if (b.dataset.b === 'rm') { if (!confirm('Remove ' + idx.length + ' targets?')) return; idx.forEach(function (i) { D.targets.splice(i, 1); }); picked = {}; }
             else idx.forEach(function (i) { D.targets[i].enabled = b.dataset.b === 'on'; });
             dirty(); draw(); drawRoles(); }; });
         }
-        $('tAdd').onclick = function () { var l = D.targets[D.targets.length - 1]; D.targets.push({ location: l ? l.location : '', host: '', enabled: true, role: l ? l.role : '' }); dirty(); tf.q = ''; $('tQ').value = ''; draw();
+        $('tAdd').onclick = function () { var l = D.targets[D.targets.length - 1]; D.targets.push({ name: '', location: l ? l.location : '', host: '', enabled: true, role: l ? l.role : '' }); dirty(); tf.q = ''; $('tQ').value = ''; draw();
           var ins = $('tB').querySelectorAll('[data-k=host]'); if (ins.length) ins[ins.length - 1].focus(); };
         $('tPaste').onclick = function () {
-          HW.modal('Paste targets', '<p class="small muted">One per line: <code>Location, IP, Role</code> (role optional) or only <code>IP</code>. Tabs and semicolons work too. Roles that don\u2019t exist yet are created.</p>' +
-            '<textarea id="bulk" placeholder="AMS, 192.0.2.10, Own&#10;AMS, 192.0.2.1, ISP&#10;198.51.100.7"></textarea>' +
-            '<div class="mt12">' + HW.sw('bUpd', true, 'Update targets already in the list', 'their location and role change to what you paste') + '</div>', '<button class="btn-g" id="bx">Cancel</button><button class="btn-p" id="bo">Apply</button>');
+          HW.modal('Paste targets', '<p class="small muted">One per line: <code>Name, Location, IP, Role</code>. Use <code>-</code> or leave it empty for no name or no location. <code>Location, IP, Role</code> and only <code>IP</code> work too, and so do tabs and semicolons. Roles that don\u2019t exist yet are created.</p>' +
+            '<textarea id="bulk" placeholder="Cloudflare DNS, -, 1.1.1.1, EXTERNAL&#10;-, AMS, 192.0.2.10, FX&#10;AMS gateway, AMS, 192.0.2.1, ISP&#10;198.51.100.7"></textarea>' +
+            '<div class="mt12">' + HW.sw('bUpd', true, 'Update targets already in the list', 'their name, location and role change to what you paste') + '</div>', '<button class="btn-g" id="bx">Cancel</button><button class="btn-p" id="bo">Apply</button>');
           $('bx').onclick = HW.closeModal;
           $('bo').onclick = function () {
             var add = 0, upd = 0, upd_on = $('bUpd').checked, have = {}; D.targets.forEach(function (t) { have[t.host] = t; });
-            $('bulk').value.split(/\n/).forEach(function (l) { l = l.trim(); if (!l || l[0] === '#') return; var p = l.split(/[,;\t]/).map(function (x) { return x.trim(); });
-              var host = p.length > 1 ? p[1] : p[0], loc = p[0], role = p[2] || '';
+            $('bulk').value.split(/\n/).forEach(function (l) { l = l.trim(); if (!l || l[0] === '#') return; var p = l.split(/[,;\t]/).map(function (x) { x = x.trim(); return x === '-' ? '' : x; });
+              // Name, Location, IP, Role – or fewer columns: the IP is the first field that looks like one
+              var hi = p.length >= 4 ? 2 : p.length === 1 ? 0 : p.findIndex(function (x) { return /^[\w.-]*[.:][\w.:-]*$/.test(x); });
+              if (hi < 0) hi = Math.min(1, p.length - 1);
+              var host = p[hi], before = p.slice(0, hi), name = before.length >= 2 ? before[0] : '', loc = before.length ? before[before.length - 1] : '', role = p[hi + 1] || '';
+              if (!host) return;
               if (role && !D.roles.some(function (r) { return r.name.toLowerCase() === role.toLowerCase(); })) D.roles.push({ name: role, upstream: /^(isp|gw|gateway|upstream)/i.test(role) });
               if (role) role = D.roles.filter(function (r) { return r.name.toLowerCase() === role.toLowerCase(); })[0].name;
-              if (have[host]) { if (upd_on && p.length > 1) { have[host].location = loc; if (p.length > 2) have[host].role = role; upd++; } }
-              else { var t = { location: loc, host: host, enabled: true, role: role }; D.targets.push(t); have[host] = t; add++; } });
+              if (have[host]) { if (upd_on && p.length > 1) { if (before.length >= 2) have[host].name = name; if (before.length) have[host].location = loc; if (p.length > hi + 1) have[host].role = role; upd++; } }
+              else { var t = { name: name, location: loc, host: host, enabled: true, role: role }; D.targets.push(t); have[host] = t; add++; } });
             HW.closeModal(); dirty(); draw(); drawRoles(); HW.toast(add + ' added, ' + upd + ' updated – press Save'); };
         };
         draw(); drawRoles();

@@ -75,6 +75,13 @@ class RoleTest(unittest.TestCase):
         r = hub.correlate(d, {}, {"loss": 1, "jitter": None, "delay": None}, 2)
         self.assertEqual([i["location"] for i in r["incidents"]], ["AMS · Own"])
 
+    def test_group_from_probe(self):
+        # 0.2.5 probes send the group: a target without a location is grouped by its role
+        s = {"host": "1.1.1.1", "location": "EXTERNAL", "role": "EXTERNAL", "group": "EXTERNAL", "points": pts(0, 60, [30])}
+        d = {"a": {"step": 60, "series": [s]}, "b": {"step": 60, "series": [dict(s)]}}
+        r = hub.correlate(d, {}, {"loss": 1, "jitter": None, "delay": None}, 2)
+        self.assertEqual([i["location"] for i in r["incidents"]], ["EXTERNAL"])
+
     def test_sites_needed(self):
         self.assertEqual(hub.sites_needed(0, 3), 3)       # all
         self.assertEqual(hub.sites_needed(2, 3), 2)

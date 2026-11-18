@@ -10,18 +10,19 @@ import os
 import re
 import threading
 
-VERSION = "0.2.4"
+VERSION = "0.2.5"
 
 DEFAULTS = {
     "site_name": "",
     "targets": [
-        {"location": "Cloudflare DNS", "host": "1.1.1.1", "enabled": True, "role": ""},
-        {"location": "Google DNS", "host": "8.8.8.8", "enabled": True, "role": ""},
+        {"name": "Cloudflare DNS", "location": "", "host": "1.1.1.1", "enabled": True, "role": "EXTERNAL"},
+        {"name": "Google DNS", "location": "", "host": "8.8.8.8", "enabled": True, "role": "EXTERNAL"},
     ],
-    # Roles split the targets of one location, e.g. your own equipment and the ISP's gateway in front
-    # of it. A role marked "upstream" is the ISP edge: when it is clean and the others are not, the
-    # problem is past the ISP.
-    "roles": [{"name": "Own", "upstream": False}, {"name": "ISP", "upstream": True}],
+    # A target has an optional name, an optional location (the DC it is in) and a role (its group).
+    # Within a location the roles stay apart: "AMS · ISP" and "AMS · FX". Without a location the
+    # role alone is the group. A role marked "upstream" is the ISP edge: when it is clean and the
+    # others of the location are not, the problem is past the ISP.
+    "roles": [{"name": "FX", "upstream": False}, {"name": "ISP", "upstream": True}, {"name": "EXTERNAL", "upstream": False}],
     "ping": {"interval_ms": 1000, "timeout_ms": 1000, "size": 56},
     "alerts": {"window_s": 60, "loss_warn": 5, "loss_crit": 20, "rtt_warn_ms": 0, "rtt_crit_ms": 0},
     # Automatic MTR: when something goes wrong (and once more when it is fixed), so there is evidence
@@ -98,6 +99,22 @@ def _merge(base, over):
     return out
 
 
+def place(t) -> str:
+    """Where a target belongs on the overview: its location, else its role, else its name or IP."""
+    return t.get("location") or t.get("role") or t.get("name") or t["host"]
+
+
+def group(t) -> str:
+    """Its group: "AMS · ISP" when it has a location and a role, else the place."""
+    return f'{t["location"]} · {t["role"]}' if t.get("location") and t.get("role") else place(t)
+
+
+def label(t) -> str:
+    """For texts: the group, with the name when it has one."""
+    g = group(t)
+    return f'{t["name"]} ({g})' if t.get("name") and t["name"] != g else g
+
+
 def validate(cfg: dict) -> dict:
     """Return a cleaned copy or raise ConfigError with a message for the UI."""
     c = _merge(DEFAULTS, cfg)
@@ -141,14 +158,15 @@ def validate(cfg: dict) -> dict:
     seen, targets = set(), []
     for t in c.get("targets") or []:
         host = str(t.get("host") or "").strip()
-        loc = str(t.get("location") or "").strip()[:60] or host
+        loc = str(t.get("location") or "").strip()[:60]
+        name = str(t.get("name") or "").strip()[:60]
         if not valid_host(host):
             raise ConfigError(f"target '{host}': not an IP address or host name")
         if host in seen:
             raise ConfigError(f"target '{host}' is listed twice")
         seen.add(host)
         role = known.get(str(t.get("role") or "").strip().lower(), "")     # a removed role leaves the target without one
-        targets.append({"location": loc, "host": host, "enabled": bool(t.get("enabled", True)), "role": role})
+        targets.append({"name": name, "location": loc, "host": host, "enabled": bool(t.get("enabled", True)), "role": role})
     if len(targets) > 500:
         raise ConfigError("at most 500 targets")
     c["targets"] = targets
