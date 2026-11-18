@@ -45,7 +45,7 @@ is stored twice. The hub has to reach the probes (LAN or VPN); the probes never 
 
 ## One image, two apps
 
-Both apps are in one image, `ghcr.io/stomko11/hopwatch`. Variables choose what runs:
+Both apps are in one image, `stomko11/hopwatch` on Docker Hub (also `ghcr.io/stomko11/hopwatch`). Variables choose what runs:
 
 | Variable | Default | |
 |---|---|---|
@@ -65,6 +65,8 @@ API token created on that probe (**Settings → Security**).
 
 ## Install on Unraid
 
+Tags: `latest` is the last release, `edge` is built from every change on `main`.
+
 1. Docker → **Add Container** → **Template repositories**: add `https://github.com/stomko11/hopwatch`,
    then pick `hopwatch`. Or copy `unraid/hopwatch.xml` to
    `/boot/config/plugins/dockerMan/templates-user/` and pick it under **Template**.
@@ -79,11 +81,11 @@ API token created on that probe (**Settings → Security**).
 ```sh
 # probe only
 docker run -d --name hopwatch --network host --cap-add NET_RAW \
-  -v /srv/hopwatch:/data --restart unless-stopped ghcr.io/stomko11/hopwatch:latest
+  -v /srv/hopwatch:/data --restart unless-stopped stomko11/hopwatch:latest
 
 # probe and hub
 docker run -d --name hopwatch --network host --cap-add NET_RAW -e HOPWATCH_HUB=true \
-  -v /srv/hopwatch:/data --restart unless-stopped ghcr.io/stomko11/hopwatch:latest
+  -v /srv/hopwatch:/data --restart unless-stopped stomko11/hopwatch:latest
 ```
 
 ## Probe API
