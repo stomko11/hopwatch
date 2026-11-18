@@ -39,7 +39,8 @@
     more: '<circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/>',
     refresh: '<path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/>',
     filter: '<path d="M3 5h18l-7 8v6l-4 2v-8z"/>',
-    link: '<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>'
+    link: '<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>',
+    expand: '<path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>'
   };
   HW.icon = function (n, cls) { return '<svg class="i' + (cls ? ' ' + cls : '') + '" viewBox="0 0 24 24" aria-hidden="true">' + (P[n] || '') + '</svg>'; };
 
@@ -273,12 +274,14 @@
 
   /* ------------------------------------------------------------ time range picker
      presets [[seconds,label]], value {range} or {from,to}; onChange({from,to,range}) */
-  HW.rangePicker = function (el, presets, value, onChange) {
+  HW.rangePicker = function (el, presets, value, onChange, o) {
+    o = o || {};
     el.className = 'range';
     el.innerHTML = '<span></span><button class="btn-s" data-c>' + HW.icon('clock') + '<span>Custom</span></button>';
-    var sg = HW.seg(el.firstChild, presets.map(function (p) { return [p[0], p[1]]; }), value.range || '', function (v) { cur = { range: +v }; label(); onChange(get()); });
+    var sg = HW.seg(el.firstChild, presets.map(function (p) { return [p[0], p[1]]; }), value.range || '', function (v) { cur = { range: v === 'live' ? 'live' : +v }; label(); onChange(get()); });
     var cur = value, cb = el.querySelector('[data-c]');
-    function get() { if (cur.range) { var t1 = Date.now() / 1000; return { from: t1 - cur.range, to: t1, range: cur.range }; } return { from: cur.from, to: cur.to }; }
+    // 'live' = the last hour, kept moving; a number = the last N seconds; else a fixed window
+    function get() { if (cur.range) { var t1 = Date.now() / 1000; return { from: t1 - (cur.range === 'live' ? (o.liveSpan || 3600) : cur.range), to: t1, range: cur.range }; } return { from: cur.from, to: cur.to }; }
     function label() { sg.set(cur.range || ''); cb.lastChild.textContent = cur.range ? 'Custom' : HW.fdt(cur.from, 1) + ' – ' + HW.fdt(cur.to, 1); cb.className = 'btn-s' + (cur.range ? '' : ' btn-p'); }
     cb.onclick = function () {
       HW.closePops();
@@ -326,10 +329,11 @@
   /* ------------------------------------------------------------ line chart (canvas)
      HW.chart(el, series:[{name, t:[sec], v:[..], color, dash}], {t0, t1, unit, pct, height, marks:[{t, color, label, id}],
               onZoom(a,b), onReset(), onMark(mark), hidden:{}, stacked:false}) */
+  HW._groups = {};
   HW.chart = function (el, series, o) {
     o.hidden = o.hidden || {};
     if (!el._cv) { el.classList.add('chart'); el.innerHTML = '<canvas></canvas><div class="legend"></div>'; el._cv = el.firstChild; }
-    var cv = el._cv, lg = el.lastChild, H = o.height || 240;
+    var cv = el._cv, lg = el.querySelector('.legend'), H = o.height || 240;   // by name: helper layers are added after it
     cv.style.height = H + 'px';
     var dpr = window.devicePixelRatio || 1, W = cv.clientWidth || el.clientWidth || 600;
     cv.width = W * dpr; cv.height = H * dpr;
@@ -393,54 +397,86 @@
     if (o.emptyText && !vis.some(function (s) { return s.v.some(function (v) { return v; }); })) {
       c.fillStyle = HW.cssv('--muted'); c.font = '13px ui-sans-serif,system-ui,sans-serif'; c.textAlign = 'center'; c.fillText(o.emptyText, L + (W - L - R) / 2, T + (H - T - B) / 2);
     }
+    /* incident bands behind the lines would hide them, so they are drawn as a thin lane at the bottom */
+    (o.bands || []).forEach(function (b) { var a = Math.max(L, X(b.t0)), z = Math.min(W - R, X(b.t1)); if (z < L || a > W - R) return;
+      c.fillStyle = b.color || HW.cssv('--bad'); c.globalAlpha = .85; c.fillRect(a, H - B - 4, Math.max(2, z - a), 4); c.globalAlpha = 1; });
     (o.marks || []).forEach(function (m) { var x = X(m.t); if (x < L || x > W - R) return; c.fillStyle = m.color || HW.cssv('--accent');
       c.globalAlpha = .25; c.fillRect(Math.round(x), T, 1, H - T - B); c.globalAlpha = 1;
       c.beginPath(); c.moveTo(x, T + 1); c.lineTo(x - 5, T - 7 + 16); c.lineTo(x + 5, T - 7 + 16); c.closePath(); c.fill(); });
-    /* legend */
+    if (o.pin && o.pin >= o.t0 && o.pin <= o.t1) {     // a pinned moment, the same on every chart of the page
+      var px = Math.round(X(o.pin)) + .5; c.strokeStyle = HW.cssv('--accent'); c.lineWidth = 1.5; c.setLineDash([4, 3]);
+      c.beginPath(); c.moveTo(px, T); c.lineTo(px, H - B); c.stroke(); c.setLineDash([]);
+      c.fillStyle = HW.cssv('--accent'); c.beginPath(); c.arc(px, T + 2, 3.5, 0, 7); c.fill();
+    }
+    /* legend: hidden items are struck through, a bar says how many are shown and offers Show all */
     lg.innerHTML = '';
-    if (series.length > 1 || o.legend) series.forEach(function (s) {
-      var b = document.createElement('button'); b.className = o.hidden[s.name] ? 'off' : ''; b.type = 'button';
-      b.innerHTML = '<i style="background:' + (s.color || HW.color(s.name)) + '"></i>' + esc(s.name);
-      b.title = 'Click: hide / show · double-click: only this one';
-      b.onclick = function (e) {
-        if (e.detail >= 2) { var only = series.every(function (x) { return x.name === s.name ? !o.hidden[x.name] : o.hidden[x.name]; });
-          series.forEach(function (x) { if (only) delete o.hidden[x.name]; else o.hidden[x.name] = x.name !== s.name; }); }
-        else { clearTimeout(lg._t); lg._t = setTimeout(function () { o.hidden[s.name] = !o.hidden[s.name]; HW.chart(el, series, o); }, 230); return; }
-        clearTimeout(lg._t); HW.chart(el, series, o);
-      };
-      lg.appendChild(b);
-    });
-    /* hover, zoom, marks */
+    if (series.length > 1 || o.legend) {
+      var nh = series.filter(function (s) { return o.hidden[s.name]; }).length;
+      if (nh) { var info = document.createElement('span'); info.className = 'lgstate';
+        info.innerHTML = 'Showing ' + (series.length - nh) + ' of ' + series.length + ' <button type="button" class="btn-xs btn-p">Show all</button>';
+        info.querySelector('button').onclick = function () { series.forEach(function (x) { delete o.hidden[x.name]; }); HW.chart(el, series, o); if (o.onFilter) o.onFilter(); };
+        lg.appendChild(info); }
+      series.forEach(function (s) {
+        var b = document.createElement('button'); b.className = o.hidden[s.name] ? 'off' : ''; b.type = 'button';
+        b.innerHTML = '<i style="background:' + (s.color || HW.color(s.name)) + '"></i>' + esc(s.name);
+        b.title = 'Click: hide / show · double-click: only this one (again: all)';
+        b.onclick = function (e) {
+          clearTimeout(lg._t);
+          if (e.detail >= 2) { var only = series.every(function (x) { return x.name === s.name ? !o.hidden[x.name] : o.hidden[x.name]; });
+            series.forEach(function (x) { if (only) delete o.hidden[x.name]; else o.hidden[x.name] = x.name !== s.name; });
+            HW.chart(el, series, o); if (o.onFilter) o.onFilter(); return; }
+          lg._t = setTimeout(function () { if (o.hidden[s.name]) delete o.hidden[s.name]; else o.hidden[s.name] = true; HW.chart(el, series, o); if (o.onFilter) o.onFilter(); }, 240);
+        };
+        lg.appendChild(b);
+      });
+    }
+    /* hover (synced crosshair across the charts of one group), zoom by dragging, click to pin */
     var tip = $('hwTip'); if (!tip) { tip = document.createElement('div'); tip.id = 'hwTip'; tip.className = 'tip hidden'; document.body.appendChild(tip); }
-    var drag = null, sel = el.querySelector('.selbox');
-    if (!sel) { sel = document.createElement('div'); sel.className = 'selbox'; sel.style.cssText = 'position:absolute;top:' + T + 'px;height:' + (H - T - B) + 'px;background:var(--accent-soft);border:1px solid var(--accent);display:none;pointer-events:none;border-radius:4px'; el.appendChild(sel); }
+    var drag = null, sel = el.querySelector('.selbox'), xh = el.querySelector('.xhair');
+    if (!sel) { sel = document.createElement('div'); sel.className = 'selbox'; sel.style.cssText = 'position:absolute;background:var(--accent-soft);border:1px solid var(--accent);display:none;pointer-events:none;border-radius:4px'; el.appendChild(sel); }
+    if (!xh) { xh = document.createElement('div'); xh.className = 'xhair'; el.appendChild(xh); }
+    sel.style.top = T + 'px'; sel.style.height = (H - T - B) + 'px'; xh.style.top = T + 'px'; xh.style.height = (H - T - B) + 'px';
+    el._cross = function (t) { if (t == null || t < o.t0 || t > o.t1) { xh.style.display = 'none'; return; } xh.style.display = 'block'; xh.style.left = Math.round(X(t)) + 'px'; };
+    var grp = o.group ? (HW._groups[o.group] = (HW._groups[o.group] || []).filter(function (x) { return document.body.contains(x) && x !== el; }).concat([el])) : [el];
+    var sync = function (t) { grp.forEach(function (x) { if (x !== el && x._cross) x._cross(t); }); };
     var near = function (x) { return (o.marks || []).filter(function (m) { return Math.abs(X(m.t) - x) < 6; }); };
+    var tAt = function (px) { return o.t0 + (Math.max(L, Math.min(W - R, px)) - L) / (W - L - R) * span; };
     cv.onmousedown = function (e) { var x = e.clientX - cv.getBoundingClientRect().left; if (x >= L && x <= W - R) { drag = x; e.preventDefault(); } };
     cv.onmouseup = function (e) {
       if (drag == null) return; var x = e.clientX - cv.getBoundingClientRect().left, a = Math.min(drag, x), b = Math.max(drag, x); drag = null; sel.style.display = 'none';
-      if (b - a < 6) { var m = near(x)[0]; if (m && o.onMark) o.onMark(m); return; }
-      var f = function (px) { return o.t0 + (Math.max(L, Math.min(W - R, px)) - L) / (W - L - R) * span; };
-      if (o.onZoom) o.onZoom(f(a), Math.max(f(b), f(a) + 60));
+      if (b - a < 6) { var m = near(x)[0]; if (m && o.onMark) return o.onMark(m); if (o.onPin && e.detail < 2) { var tp = tAt(x); clearTimeout(cv._pt); cv._pt = setTimeout(function () { o.onPin(tp); }, 250); } return; }
+      if (o.onZoom) o.onZoom(tAt(a), Math.max(tAt(b), tAt(a) + 60));
     };
-    cv.ondblclick = function () { if (o.onReset) o.onReset(); };
-    cv.onmouseleave = function () { tip.className = 'tip hidden'; drag = null; sel.style.display = 'none'; };
+    cv.ondblclick = function () { clearTimeout(cv._pt); if (o.onReset) o.onReset(); };
+    cv.onmouseleave = function () { tip.className = 'tip hidden'; drag = null; sel.style.display = 'none'; xh.style.display = 'none'; sync(null); };
     cv.onmousemove = function (e) {
       var r = cv.getBoundingClientRect(), x = e.clientX - r.left;
       if (drag != null) { var a = Math.min(drag, x), b = Math.max(drag, x); sel.style.display = 'block'; sel.style.left = a + 'px'; sel.style.width = (b - a) + 'px'; tip.className = 'tip hidden'; return; }
-      if (x < L || x > W - R || !vis.length) { tip.className = 'tip hidden'; return; }
-      var t = o.t0 + (x - L) / (W - L - R) * span, rows = [], at = null;
+      if (x < L || x > W - R) { tip.className = 'tip hidden'; xh.style.display = 'none'; sync(null); return; }
+      var t = tAt(x), rows = [], at = null;
+      el._cross(t); sync(t);
       vis.forEach(function (s) { var bi = -1, bd = 1e18; for (var i = 0; i < s.t.length; i++) { var d = Math.abs(s.t[i] - t); if (d < bd) { bd = d; bi = i; } }
         if (bi >= 0 && s.v[bi] != null && bd < span / 40 + 120) { rows.push([s, s.v[bi]]); at = s.t[bi]; } });
       rows.sort(function (a, b) { return b[1] - a[1]; });
-      var ms = near(x);
+      if (o.tipHideZero) rows = rows.filter(function (r) { return r[1] > 0; });
+      var ms = near(x), bs = (o.bands || []).filter(function (b) { return t >= b.t0 && t <= b.t1; });
       tip.innerHTML = '<b>' + HW.fdt(at || t) + '</b>' + rows.slice(0, 16).map(function (r) {
-        return '<div class="r"><i style="background:' + (r[0].color || HW.color(r[0].name)) + '"></i><span class="ell">' + esc(r[0].name) + '</span><span class="v">' + HW.fnum(r[1], o.pct || r[1] >= 100 ? 1 : 1) + ' ' + (o.unit || '') + '</span></div>'; }).join('') +
-        (rows.length > 16 ? '<div class="muted">+' + (rows.length - 16) + ' more</div>' : '') + (!rows.length ? '<div class="muted">no data</div>' : '') +
+        return '<div class="r"><i style="background:' + (r[0].color || HW.color(r[0].name)) + '"></i><span class="ell">' + esc(r[0].name) + '</span><span class="v">' + HW.fnum(r[1], 1) + ' ' + (o.unit || '') + '</span></div>'; }).join('') +
+        (rows.length > 16 ? '<div class="muted">+' + (rows.length - 16) + ' more</div>' : '') + (!rows.length ? '<div class="muted">' + (o.tipHideZero ? 'nothing over the limit' : 'no data') + '</div>' : '') +
+        bs.slice(0, 4).map(function (b) { return '<div class="r" style="margin-top:4px"><i style="background:' + (b.color || 'var(--bad)') + '"></i>' + esc(b.label) + '</div>'; }).join('') +
         ms.map(function (m) { return '<div class="r" style="margin-top:4px"><i style="background:' + (m.color || 'var(--accent)') + '"></i>' + esc(m.label) + '</div>'; }).join('') +
-        (ms.length ? '<div class="muted xs">click to open</div>' : '');
+        '<div class="muted xs" style="margin-top:4px">' + (ms.length ? 'click to open the MTR' : (o.onPin ? 'click to pin · ' : '') + 'drag to zoom') + '</div>';
       tip.className = 'tip'; tip.style.left = Math.min(e.clientX + 14, innerWidth - 300) + 'px'; tip.style.top = Math.min(e.clientY + 14, innerHeight - tip.offsetHeight - 8) + 'px';
     };
     return o;
+  };
+
+  /* a chart in a large dialog; same series and options, more room */
+  HW.expandChart = function (title, series, o) {
+    var m = HW.modal(title, '<div id="hwBig"></div>', '');
+    m.classList.add('wide');
+    var big = Object.assign({}, o, { height: Math.max(320, Math.round(innerHeight * 0.62)), group: null });
+    setTimeout(function () { HW.chart($('hwBig'), series, big); }, 30);
   };
 
   /* ------------------------------------------------------------ data table

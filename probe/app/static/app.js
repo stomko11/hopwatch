@@ -243,9 +243,9 @@
     $('main').innerHTML = '<div class="card"><div class="bd row gap12"><span id="rg"></span><div id="sel"></div><span id="grp"></span>' +
       '<label class="switch"><input type="checkbox" id="mk"' + (cf.marks ? ' checked' : '') + '><span class="t">MTR marks</span></label><span class="grow"></span><span class="xs muted" id="res"></span></div></div>' +
       [['rtt', 'Latency', 'average round-trip time, ms'], ['loss', 'Packet loss', '% of pings lost'], ['jit', 'Jitter', 'mean difference between pings, ms']].map(function (c) {
-        return '<div class="card"><div class="hd"><h2>' + c[1] + '</h2><span class="sub">' + c[2] + '</span></div><div class="bd"><div id="c_' + c[0] + '"><div class="empty" style="height:240px;display:flex;align-items:center;justify-content:center">Loading…</div></div></div></div>'; }).join('');
+        return '<div class="card"><div class="hd"><h2>' + c[1] + '</h2><span class="sub">' + c[2] + '</span><span class="grow"></span><button class="btn-s btn-g btn-i" id="x_' + c[0] + '" title="Enlarge">' + I('expand') + '</button></div><div class="bd"><div id="c_' + c[0] + '"><div class="empty" style="height:240px;display:flex;align-items:center;justify-content:center">Loading…</div></div></div></div>'; }).join('');
     var win = cf.custom ? { from: cf.custom[0], to: cf.custom[1] } : { range: cf.range };
-    var hidden = { rtt: {}, loss: {}, jit: {} };
+    var hidden = { rtt: {}, loss: {}, jit: {} }, pin = null;
     var rp = HW.rangePicker($('rg'), RANGES, win, function (w) { win = w.range ? { range: w.range } : w; cf.custom = w.range ? null : [w.from, w.to]; if (w.range) cf.range = w.range; HW.ls('chf', cf); load(); });
     HW.seg($('grp'), [['location', 'Per location'], ['host', 'Per IP']], cf.group, function (v) { cf.group = v; HW.ls('chf', cf); load(); });
     $('mk').onchange = function () { cf.marks = this.checked; HW.ls('chf', cf); load(); };
@@ -267,13 +267,13 @@
         $('res').textContent = 'resolution ' + HW.fdur(d.step) + ' · ' + { raw: 'every ping', m1: '1-minute data', m5: '5-minute data' }[d.tier];
         var mk = function (col) { return d.series.map(function (s) { return { name: s.name, t: s.points.map(function (x) { return x[0]; }), v: s.points.map(function (x) { return x[col]; }) }; }); };
         var marks = runs.map(function (m) { return { t: m.started || m.created, color: markColor(m.trig), label: 'MTR ' + m.host + ' · ' + TRIG[m.trig][0] + (m.reason ? ' · ' + m.reason : ''), id: m.id }; });
-        var o = function (k, unit, pct) { return { t0: w.from, t1: w.to, unit: unit, pct: pct, hidden: hidden[k], marks: marks,
+        var o = function (k, unit, pct) { return { t0: w.from, t1: w.to, unit: unit, pct: pct, hidden: hidden[k], marks: marks, group: 'pc', pin: pin, peakLabels: k === 'loss', tipHideZero: k === 'loss',
+          onPin: function (t) { pin = pin && Math.abs(pin - t) < (w.to - w.from) / 200 ? null : t; load(); },
           onMark: function (m) { location.hash = '#/mtr/' + m.id; },
           onZoom: function (a, b) { rp.set({ from: a, to: b }); win = { from: a, to: b }; cf.custom = [a, b]; HW.ls('chf', cf); load(); },
           onReset: function () { if (cf.custom) { cf.custom = null; rp.set({ range: cf.range }); win = { range: cf.range }; HW.ls('chf', cf); load(); } } }; };
-        HW.chart($('c_rtt'), mk(1), o('rtt', 'ms'));
-        HW.chart($('c_loss'), mk(2), o('loss', '%', true));
-        HW.chart($('c_jit'), mk(3), o('jit', 'ms'));
+        var all = { rtt: [mk(1), o('rtt', 'ms'), 'Latency'], loss: [mk(2), o('loss', '%', true), 'Packet loss'], jit: [mk(3), o('jit', 'ms'), 'Jitter'] };
+        Object.keys(all).forEach(function (k) { HW.chart($('c_' + k), all[k][0], all[k][1]); $('x_' + k).onclick = function () { HW.expandChart(all[k][2], all[k][0], all[k][1]); }; });
       }).catch(fail);
     }
     S.timers.push(setInterval(function () { if (!cf.custom) load(); }, 15000));

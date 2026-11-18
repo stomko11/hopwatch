@@ -120,48 +120,88 @@
     }).catch(fail);
   }
 
-  /* ------------------------------------------------------------ overview: charts + locations x sites */
-  var OV_RANGES = [['live', 'Live'], ['900', '15m'], ['3600', '1h'], ['10800', '3h'], ['21600', '6h'], ['86400', '24h']];
+  /* ------------------------------------------------------------ overview: one main chart + locations x sites */
+  var SIGS = [['loss', 'Loss', '%', true], ['delay', 'Latency rise', 'ms', false], ['jitter', 'Jitter', 'ms', false]];
   function vOverview() {
-    head('Overview', 'Every location as seen from every site', '<button class="btn-p" id="runBtn">' + I('play') + '<span>MTR from all sites</span></button>');
+    head('Overview', 'What the sites see – together or each on its own', '<button class="btn-p" id="runBtn">' + I('play') + '<span>MTR from all sites</span></button>');
     $('runBtn').onclick = function () { mtrDialog([]); };
     var f = HW.lsj('hovf', { q: '', only: 'all', locs: [] });
-    f.range = f.range || 'live';
-    var locMs = null, ov = null, hidden = { loss: {}, ex: {}, jit: {}, sim: {} };
-    $('main').innerHTML = '<div class="row"><span id="ovR"></span><span class="grow"></span><span class="xs muted" id="ovUpd"></span></div><div class="kpis" id="kpis"></div><div class="row" id="pstrip"></div>' +
-      '<div class="cgrid">' + [['loss', 'Loss seen from all sites'], ['ex', 'Latency rise seen from all sites'], ['jit', 'Jitter seen from all sites'], ['sim', 'How many IPs had problems']].map(function (c) {
-        return '<div class="card"><div class="hd"><h2>' + c[1] + '</h2><span class="sub" id="os_' + c[0] + '"></span></div><div class="bd"><div id="oc_' + c[0] + '"><div class="empty" style="height:160px;display:flex;align-items:center;justify-content:center">Loading…</div></div></div></div>'; }).join('') + '</div>' +
-      '<div class="card"><div class="hd"><h2>Locations</h2><span class="sub" id="ovSub"></span></div><div class="bd col gap12"><div class="row"><div class="search" style="width:240px">' + I('search') + '<input id="ovQ" placeholder="Filter" value="' + esc(f.q) + '"></div><span id="ovOnly"></span><div id="ovL"></div></div><div class="tw" id="mx"></div></div></div>';
+    f.view = f.view || 'common'; f.sig = f.sig || 'loss';
+    var locMs = null, ov = null, hidden = {}, pin = null;
+    $('main').innerHTML = '<div class="card"><div class="bd row gap12"><span id="ovR"></span><span class="grow"></span><span class="xs muted" id="ovUpd"></span></div></div>' +
+      '<div class="kpis" id="kpis"></div><div class="row" id="pstrip"></div>' +
+      '<div class="card"><div class="hd"><h2 id="mcT">…</h2><span class="sub" id="mcS"></span><span class="grow"></span><span id="ovV"></span><span id="ovS"></span>' +
+      '<button class="btn-s btn-g btn-i" id="mcX" title="Enlarge">' + I('expand') + '</button></div><div class="bd"><div id="pinbar"></div><div id="mc"><div class="empty" style="height:300px;display:flex;align-items:center;justify-content:center">Loading…</div></div>' +
+      '<div class="mt12 small muted">How many IPs had problems · red = several sites, amber = one site only, purple = one site\u2019s own link</div><div id="ms"></div></div></div>' +
+      '<div class="card"><div class="hd"><h2>Locations</h2><span class="sub" id="ovSub"></span></div><div class="bd col gap12"><div class="row"><div class="search" style="width:240px">' + I('search') + '<input id="ovQ" placeholder="Filter" value="' + esc(f.q) + '"></div><span id="ovOnly"></span><div id="ovL"></div></div><div id="mx"></div></div></div>';
     $('ovQ').oninput = function () { f.q = this.value.toLowerCase(); HW.ls('hovf', f); draw(); };
     HW.seg($('ovOnly'), [['all', 'All'], ['bad', 'Problems only']], f.only, function (v) { f.only = v; HW.ls('hovf', f); draw(); });
-    HW.seg($('ovR'), OV_RANGES, f.range, function (v) { f.range = v; HW.ls('hovf', f); ov = null; loadOv(); draw(); });
-    function rangeSec() { return f.range === 'live' ? 3600 : +f.range; }
+    var rp = HW.rangePicker($('ovR'), [['live', 'Live'], [900, '15m'], [3600, '1h'], [10800, '3h'], [21600, '6h'], [86400, '24h'], [604800, '7d']],
+      f.win || { range: 'live' }, function (w) { f.win = w.range ? { range: w.range } : { from: w.from, to: w.to }; HW.ls('hovf', f); ov = null; loadOv(); draw(); });
+    HW.seg($('ovS'), SIGS.map(function (x) { return [x[0], x[1]]; }), f.sig, function (v) { f.sig = v; HW.ls('hovf', f); hidden = {}; charts(); });
+    function viewSeg() {
+      var l = S.live; if (!l) return;
+      var opts = l.probes.map(function (p) { return [p.id, p.name, 'What ' + p.name + ' saw on its own']; }).concat([['common', 'Common', 'Only what all sites saw at the same moment']]);
+      if (!opts.some(function (x) { return x[0] === f.view; })) f.view = 'common';
+      HW.seg($('ovV'), opts, f.view, function (v) { f.view = v; HW.ls('hovf', f); hidden = {}; charts(); });
+      $('ovV').dataset.n = l.probes.length;
+    }
+    function series() {
+      if (!ov) return [];
+      var src = f.view === 'common' ? ov.lines[f.sig] : ((ov.by_probe[f.view] || {})[f.sig] || []);
+      return src.map(function (x) { return { name: x.name, color: HW.color('loc|' + x.name), t: x.t, v: x.v }; });
+    }
+    function bands() {
+      if (!ov) return [];
+      var pname = f.view === 'common' ? null : (ov.probes.filter(function (p) { return p.id === f.view; })[0] || {}).name;
+      return ov.incidents.filter(function (i) { return i.signal === f.sig && (pname ? i.site_names.indexOf(pname) >= 0 : i.kind === 'target'); })
+        .map(function (i) { return { t0: i.t0, t1: i.t1, color: HW.cssv(i.kind === 'target' ? '--bad' : i.kind === 'site' ? '--purple' : '--warn'), label: i.location + ' ' + i.host + ' – ' + KIND[i.kind][0] }; });
+    }
+    function opts(height) {
+      var sg = SIGS.filter(function (x) { return x[0] === f.sig; })[0], w = rp.get();
+      return { t0: ov ? ov.from : w.from, t1: ov ? ov.to : w.to, unit: sg[2], pct: sg[3], height: height || 300, legend: true, hidden: hidden, peakLabels: true, tipHideZero: true, group: 'ov', pin: pin,
+        bands: bands(), emptyText: f.view === 'common' ? 'Nothing seen from all sites at the same moment' : 'Nothing over the limit from this site',
+        onZoom: function (a, b) { rp.set({ from: a, to: b }); f.win = { from: a, to: b }; HW.ls('hovf', f); ov = null; loadOv(); draw(); },
+        onReset: function () { rp.set({ range: 'live' }); f.win = { range: 'live' }; HW.ls('hovf', f); ov = null; loadOv(); draw(); },
+        onPin: function (t) { pin = t; charts(); } };
+    }
     function charts() {
+      viewSeg();
       if (!ov) return;
-      var t1 = ov.to, t0 = ov.from, K = ov.min_sites, th = ov.thresholds, who = K > 1 ? 'at least ' + K + ' sites at the same moment' : 'the site';
-      $('os_loss').textContent = '% lost, as seen by ' + who + ' (over ' + th.loss + '%) · one line per location';
-      $('os_ex').textContent = 'ms above each site\u2019s normal, seen by ' + who + ' (over ' + th.delay + ' ms)';
-      $('os_jit').textContent = 'ms, seen by ' + who + ' (over ' + th.jitter + ' ms)';
-      $('os_sim').textContent = 'red = several sites, amber = one site only, purple = one site\u2019s own link';
-      var mk = function (k) { return (ov.lines[k] || []).map(function (l) { return { name: l.name, color: HW.color('loc|' + l.name), t: l.t, v: l.v }; }); };
-      var none = K > 1 ? 'Nothing seen from all sites at the same time' : 'Nothing over the limit';
-      var o = function (key, unit, pct, extra) { return Object.assign({ t0: t0, t1: t1, unit: unit, pct: pct, height: 160, legend: true, hidden: hidden[key], peakLabels: true, emptyText: none,
-        onZoom: function (a, b) { location.hash = '#/incidents?from=' + Math.floor(a) + '&to=' + Math.ceil(b); } }, extra || {}); };
-      HW.chart($('oc_loss'), mk('loss'), o('loss', '%', true));
-      HW.chart($('oc_ex'), mk('delay'), o('ex', 'ms'));
-      HW.chart($('oc_jit'), mk('jitter'), o('jit', 'ms'));
+      var sg = SIGS.filter(function (x) { return x[0] === f.sig; })[0], th = ov.thresholds, K = ov.min_sites;
+      var pname = f.view === 'common' ? null : (ov.probes.filter(function (p) { return p.id === f.view; })[0] || {}).name;
+      $('mcT').textContent = sg[1] + (pname ? ' · from ' + pname : ' · seen from all sites');
+      $('mcS').textContent = (pname ? 'locations where ' + pname + ' saw ' : 'locations where at least ' + K + ' sites saw at the same moment ') +
+        ({ loss: 'loss over ' + th.loss + '%', delay: 'latency over its normal by ' + th.delay + ' ms or more', jitter: 'jitter over ' + th.jitter + ' ms' })[f.sig] + ' · coloured lane at the bottom = incidents';
+      var ser = series(), o = opts();
+      HW.chart($('mc'), ser, o);
+      $('mcX').onclick = function () { HW.expandChart($('mcT').textContent, ser, opts()); };
       var t = ov.simultaneous.map(function (b) { return b[0]; });
-      HW.chart($('oc_sim'), [{ name: 'Several sites', color: HW.cssv('--bad'), t: t, v: ov.simultaneous.map(function (b) { return b[1]; }) },
+      HW.chart($('ms'), [{ name: 'Several sites', color: HW.cssv('--bad'), t: t, v: ov.simultaneous.map(function (b) { return b[1]; }) },
         { name: 'One site', color: HW.cssv('--warn'), t: t, v: ov.simultaneous.map(function (b) { return b[2]; }) },
-        { name: 'Site link', color: HW.cssv('--purple'), t: t, v: ov.simultaneous.map(function (b) { return b[3]; }) }], o('sim', 'IPs', false, { bars: true, step: ov.step, peakLabels: false, emptyText: 'No problems' }));
+        { name: 'Site link', color: HW.cssv('--purple'), t: t, v: ov.simultaneous.map(function (b) { return b[3]; }) }],
+        Object.assign(opts(90), { bars: true, step: ov.step, peakLabels: false, bands: [], legend: false, hidden: {}, unit: 'IPs', pct: false, emptyText: 'No problems' }));
+      pinBar();
+    }
+    function pinBar() {
+      if (!pin) { $('pinbar').innerHTML = ''; return; }
+      var near = ov ? ov.incidents.filter(function (i) { return pin >= i.t0 - 60 && pin <= i.t1 + 60; }) : [];
+      $('pinbar').innerHTML = '<div class="pinbar mt8" style="margin-bottom:10px">' + I('clock') + '<span>Pinned <b>' + HW.fdt(pin) + '</b></span>' +
+        (near.length ? '<span class="small">' + near.slice(0, 3).map(function (i) { return esc(i.location) + ' (' + KIND[i.kind][0].toLowerCase() + ')'; }).join(', ') + '</span>' : '') +
+        '<span class="grow"></span><button class="btn-xs" data-p="zoom">Zoom to ±15 min</button><button class="btn-xs" data-p="mtr">MTR runs around</button><button class="btn-xs" data-p="ev">Evidence</button><button class="btn-xs btn-g btn-i" data-p="x" title="Unpin">' + I('x') + '</button></div>';
+      [].forEach.call($('pinbar').querySelectorAll('[data-p]'), function (b) { b.onclick = function () { var a = Math.floor(pin - 900), z = Math.ceil(Math.min(Date.now() / 1000, pin + 900));
+        if (b.dataset.p === 'x') { pin = null; charts(); }
+        else if (b.dataset.p === 'zoom') { rp.set({ from: a, to: z }); f.win = { from: a, to: z }; HW.ls('hovf', f); ov = null; loadOv(); draw(); }
+        else if (b.dataset.p === 'mtr') location.hash = '#/mtr?from=' + a + '&to=' + z;
+        else location.hash = '#/evidence?from=' + a + '&to=' + z; }; });
     }
     function loadOv() {
-      var t1 = Math.floor(Date.now() / 15000) * 15, W = ($('oc_loss') && $('oc_loss').clientWidth) || 600;   // rounded: repeated loads hit the hub's cache
-      api('/api/overview?from=' + (t1 - rangeSec()) + '&to=' + t1 + '&points=' + (W > 500 ? 200 : 120)).then(function (r) { ov = r; charts(); draw(); }).catch(fail);
+      var w = rp.get(), t1 = w.range ? Math.floor(Date.now() / 15000) * 15 : Math.ceil(w.to), t0 = w.range ? t1 - (w.to - w.from) : Math.floor(w.from), W = ($('mc') && $('mc').clientWidth) || 600;
+      api('/api/overview?from=' + t0 + '&to=' + t1 + '&points=' + (W > 500 ? 200 : 120)).then(function (r) { ov = r; charts(); draw(); }).catch(fail);
     }
     function draw() {
       var l = S.live; if (!l) return;
-      var ps = l.probes, K = Math.min(l.correlate.min_sites, Math.max(1, okProbes(l).length)), live = f.range === 'live';
+      var ps = l.probes, K = Math.min(l.correlate.min_sites, Math.max(1, okProbes(l).length)), live = rp.get().range === 'live';
       if (!live && !ov) return;
       var locs = {}, order = [];
       if (live) {
@@ -185,7 +225,7 @@
       var multi = 0, single = 0;
       order.forEach(function (x) { var v = verdict(locs[x]); if (v[0] === 'bad') multi++; else if (v[0] === 'warn') single++; });
       var online = ps.filter(function (p) { return !p.error || p.targets; });
-      var running = ps.reduce(function (a, p) { return a + (p.mtr ? p.mtr.running.length : 0); }, 0), rl = live ? 'now' : 'in the last ' + OV_RANGES.filter(function (r) { return r[0] === f.range; })[0][1];
+      var running = ps.reduce(function (a, p) { return a + (p.mtr ? p.mtr.running.length : 0); }, 0), rl = live ? 'now' : 'in the chosen window';
       $('kpis').innerHTML = kpi('server', 'Probes online', '<span class="' + (online.length < ps.length ? 'warn' : 'ok') + '">' + online.length + '</span><span class="small muted"> / ' + ps.length + '</span>', ps.filter(function (p) { return p.error && !p.targets; }).map(function (p) { return esc(p.name) + ' offline'; }).join(', ') || 'all answering') +
         kpi('alert', 'Seen from several sites', '<span class="' + (multi ? 'bad' : 'ok') + '">' + multi + '</span>', 'locations ' + rl + ', likely the target side') +
         kpi('info', 'Seen from one site only', '<span class="' + (single ? 'warn' : 'ok') + '">' + single + '</span>', 'locations ' + rl + ', likely that site\u2019s path') +
@@ -217,8 +257,8 @@
           { label: 'MTR from all sites', icon: 'play', onClick: function () { mtrDialog(hs); } },
           { label: 'Incidents for this location', icon: 'alert', onClick: function () { location.hash = '#/incidents?loc=' + encodeURIComponent(x); } }]); }; });
     }
-    every(function () { live().then(draw).catch(fail); }, 4000);
-    every(loadOv, 20000);
+    every(function () { live().then(function () { viewSeg(); draw(); }).catch(fail); }, 10000);
+    every(function () { if (!ov || rp.get().range) loadOv(); }, 20000);
     window.onresize = function () { if (S.view === 'overview') charts(); };
   }
 
@@ -301,12 +341,12 @@
     if (qs('host')) { f.sel = [qs('host')]; f.group = 'host'; }
     live().then(function (l) {
       $('main').innerHTML = '<div class="card"><div class="bd row gap12"><span id="cR"></span><div id="cT"></div><div id="cP"></div><span id="cG"></span><span class="grow"></span><span class="xs muted" id="cRes"></span></div></div>' +
-        [['rtt', 'Latency', 'ms'], ['loss', 'Packet loss', '%'], ['jit', 'Jitter', 'ms']].map(function (c) { return '<div class="card"><div class="hd"><h2>' + c[1] + '</h2><span class="sub">' + c[2] + '</span></div><div class="bd"><div id="k_' + c[0] + '"><div class="empty">Pick one or a few targets or locations above.</div></div></div></div>'; }).join('');
+        [['rtt', 'Latency', 'ms'], ['loss', 'Packet loss', '%'], ['jit', 'Jitter', 'ms']].map(function (c) { return '<div class="card"><div class="hd"><h2>' + c[1] + '</h2><span class="sub">' + c[2] + '</span><span class="grow"></span><button class="btn-s btn-g btn-i" id="kx_' + c[0] + '" title="Enlarge">' + I('expand') + '</button></div><div class="bd"><div id="k_' + c[0] + '"><div class="empty">Pick one or a few targets or locations above.</div></div></div></div>'; }).join('');
       var rp = HW.rangePicker($('cR'), [[3600, '1h'], [21600, '6h'], [86400, '24h'], [604800, '7d'], [2592000, '30d']], qs('from') ? { from: +qs('from'), to: +qs('to') } : { range: f.range }, function (w) { if (w.range) f.range = w.range; HW.ls('hcmp', f); load(); });
       HW.ms($('cT'), { options: targetOpts(l, true), value: f.sel, label: 'Show', placeholder: 'pick…', onChange: function (v) { f.sel = v; HW.ls('hcmp', f); load(); } });
       HW.ms($('cP'), { options: probeOpts(l), value: f.probes, label: 'Sites', onChange: function (v) { f.probes = v; HW.ls('hcmp', f); load(); } });
       HW.seg($('cG'), [['location', 'Per location'], ['host', 'Per IP']], f.group, function (v) { f.group = v; HW.ls('hcmp', f); load(); });
-      var hidden = { rtt: {}, loss: {}, jit: {} };
+      var hidden = { rtt: {}, loss: {}, jit: {} }, pin = null;
       function load() {
         if (!f.sel.length) return;
         var w = rp.get(), W = $('k_rtt').clientWidth || 900;
@@ -315,9 +355,11 @@
           var order = l.probes.map(function (p) { return p.id; });
           var mk = function (col) { return d.series.map(function (s) { return { name: s.name, dash: order.indexOf(s.probe) % 2 === 1, color: HW.color((f.group === 'host' ? s.host : s.location) + '|' + s.probe),
             t: s.points.map(function (x) { return x[0]; }), v: s.points.map(function (x) { return x[col]; }) }; }); };
-          var o = function (k, unit, pct) { return { t0: w.from, t1: w.to, unit: unit, pct: pct, hidden: hidden[k], legend: true,
+          var o = function (k, unit, pct) { return { t0: w.from, t1: w.to, unit: unit, pct: pct, hidden: hidden[k], legend: true, group: 'cmp', pin: pin, peakLabels: k === 'loss', tipHideZero: k === 'loss',
+            onPin: function (t) { pin = pin && Math.abs(pin - t) < (w.to - w.from) / 200 ? null : t; load(); },
             onZoom: function (a, b) { rp.set({ from: a, to: b }); load(); }, onReset: function () { rp.set({ range: f.range }); load(); } }; };
-          HW.chart($('k_rtt'), mk(1), o('rtt', 'ms')); HW.chart($('k_loss'), mk(2), o('loss', '%', true)); HW.chart($('k_jit'), mk(3), o('jit', 'ms'));
+          var all = { rtt: [mk(1), o('rtt', 'ms'), 'Latency'], loss: [mk(2), o('loss', '%', true), 'Packet loss'], jit: [mk(3), o('jit', 'ms'), 'Jitter'] };
+          Object.keys(all).forEach(function (k) { HW.chart($('k_' + k), all[k][0], all[k][1]); $('kx_' + k).onclick = function () { HW.expandChart(all[k][2], all[k][0], all[k][1]); }; });
         }).catch(fail);
       }
       load();

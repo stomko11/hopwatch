@@ -169,6 +169,25 @@ def api_overview(h, q, _):
                 out.append({"name": loc, "peak": round(peak, 2), "t": grid_t, "v": [round(pts[t], 2) if t in pts else None for t in grid_t]})
         out.sort(key=lambda x: -x["peak"])
         lines[sig] = out[:20]
+    # the same per site: what each site saw on its own (worst IP of the location, over the limit only)
+    by_probe = {}
+    for p in data:
+        per = {"loss": {}, "delay": {}, "jitter": {}}
+        for hst, by in grid.items():
+            loc, base = locs[hst], normal[hst].get(p)
+            for t, (avg, loss, jit) in by.get(p, {}).items():
+                vals = {"loss": loss if loss is not None and loss > th["loss"] else 0.0,
+                        "jitter": jit if jit is not None and jit > th["jitter"] else 0.0,
+                        "delay": (avg - base) if avg is not None and base is not None and avg - base > th["delay"] else 0.0}
+                for sig, v in vals.items():
+                    d = per[sig].setdefault(loc, {})
+                    d[t] = max(d.get(t, 0.0), v)
+        by_probe[p] = {}
+        for sig, locd in per.items():
+            out = [{"name": loc, "peak": round(max(pts.values() or [0]), 2), "t": grid_t,
+                    "v": [round(pts[t], 2) if t in pts else None for t in grid_t]} for loc, pts in locd.items()]
+            out = sorted([x for x in out if x["peak"] > 0], key=lambda x: -x["peak"])[:20]
+            by_probe[p][sig] = out
     verdict = {}
     for i in corr_b["incidents"]:
         v = verdict.setdefault(i["location"], {"target": set(), "one": set()})
@@ -199,7 +218,8 @@ def api_overview(h, q, _):
         out_rows.append({"location": loc, "hosts": sorted(r["hosts"]), "by": by,
                          "several": sorted(v["target"]), "one": sorted(v["one"] - v["target"])})
     return {"from": t0, "to": t1, "step": step, "probes": [{"id": p["id"], "name": p["name"]} for p in ps],
-            "lines": lines, "min_sites": K, "thresholds": th, "simultaneous": corr_b["buckets"], "locations": out_rows,
+            "lines": lines, "by_probe": by_probe, "min_sites": K,
+            "incidents": [{k2: i[k2] for k2 in ("t0", "t1", "kind", "location", "host", "signal", "site_names")} for i in corr_b["incidents"]][:500], "thresholds": th, "simultaneous": corr_b["buckets"], "locations": out_rows,
             "errors": {names[pid]: d["error"] for pid, d in res.items() if "error" in d}}
 
 
