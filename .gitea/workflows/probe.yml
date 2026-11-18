@@ -8,7 +8,7 @@ name: probe
 on:
   push:
     branches: [main]
-    paths: ["probe/**", "ui/**", ".gitea/workflows/probe.yml"]
+    paths: ["probe/**", "ui/**", "shared/**", ".gitea/workflows/probe.yml"]
   workflow_dispatch:
 
 jobs:

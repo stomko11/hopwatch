@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
     tags: ["probe-v*"]
-    paths: ["probe/**", "ui/**", ".github/workflows/probe.yml"]
+    paths: ["probe/**", "ui/**", "shared/**", ".github/workflows/probe.yml"]
   pull_request:
     paths: ["probe/**"]
 

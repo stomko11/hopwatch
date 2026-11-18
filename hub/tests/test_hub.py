@@ -1,0 +1,93 @@
+import os
+import sys
+import tempfile
+import unittest
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "app"))
+
+import config  # noqa: E402
+import hub     # noqa: E402
+
+
+def probe(step, series):
+    return {"step": step, "series": [{"host": h, "location": loc, "points": pts} for h, loc, pts in series]}
+
+
+def pts(t0, step, losses, avg=20.0):
+    return [[t0 + i * step, avg if l < 100 else None, l, 1.0, avg] for i, l in enumerate(losses)]
+
+
+class CorrelateTest(unittest.TestCase):
+    TH = {"loss": 1.0, "jitter": None, "delay": None}
+    NAMES = {"a": "Site A", "b": "Site B"}
+
+    def test_target_incident_seen_from_both(self):
+        d = {"a": probe(60, [("192.0.2.1", "X", pts(0, 60, [0, 30, 40, 0, 0]))]),
+             "b": probe(60, [("192.0.2.1", "X", pts(0, 60, [0, 20, 50, 0, 0]))])}
+        r = hub.correlate(d, self.NAMES, self.TH, 2, join_s=0)
+        self.assertEqual(len(r["incidents"]), 1)
+        i = r["incidents"][0]
+        self.assertEqual((i["kind"], i["t0"], i["t1"], i["buckets"]), ("target", 60, 180, 2))
+        self.assertEqual(i["worst"], {"Site A": 40, "Site B": 50})
+
+    def test_one_site_path_and_site_uplink(self):
+        # site A loses on its single target only -> path; site B loses on all its targets -> its uplink
+        d = {"a": probe(60, [("192.0.2.1", "X", pts(0, 60, [0, 30, 0])), ("192.0.2.2", "Y", pts(0, 60, [0, 0, 0])),
+                             ("192.0.2.3", "Z", pts(0, 60, [0, 0, 0]))]),
+             "b": probe(60, [("192.0.2.1", "X", pts(0, 60, [0, 0, 0])), ("192.0.2.2", "Y", pts(0, 60, [0, 0, 80])),
+                             ("192.0.2.3", "Z", pts(0, 60, [0, 0, 90]))])}
+        r = hub.correlate(d, self.NAMES, self.TH, 2)
+        kinds = sorted((i["host"], i["kind"], tuple(i["site_names"])) for i in r["incidents"])
+        self.assertEqual(kinds, [("192.0.2.1", "path", ("Site A",)), ("192.0.2.2", "site", ("Site B",)),
+                                 ("192.0.2.3", "site", ("Site B",))])
+
+    def test_different_steps_are_aligned(self):
+        d = {"a": probe(60, [("h", "X", pts(0, 60, [0, 0, 0, 0, 30, 0]))]),
+             "b": probe(120, [("h", "X", pts(0, 120, [0, 0, 25]))])}
+        r = hub.correlate(d, self.NAMES, self.TH, 2)
+        self.assertEqual([(i["kind"], i["t0"]) for i in r["incidents"]], [("target", 240)])
+
+    def test_delay_against_own_normal(self):
+        a = [[i * 60, 20.0 if i != 5 else 120.0, 0, 1, 20] for i in range(10)]
+        b = [[i * 60, 200.0 if i != 5 else 290.0, 0, 1, 200] for i in range(10)]   # far site, slower normal
+        d = {"a": probe(60, [("h", "X", a)]), "b": probe(60, [("h", "X", b)])}
+        r = hub.correlate(d, self.NAMES, {"loss": None, "jitter": None, "delay": 50}, 2)
+        self.assertEqual([(i["signal"], i["t0"]) for i in r["incidents"]], [("delay", 300)])
+
+    def test_failed_probe_is_ignored(self):
+        d = {"a": probe(60, [("h", "X", pts(0, 60, [50]))]), "b": {"error": "down"}}
+        r = hub.correlate(d, self.NAMES, self.TH, 1)
+        self.assertEqual(len(r["incidents"]), 1)
+
+    def test_one_site_fragment_inside_shared_incident_is_merged(self):
+        d = {"a": probe(60, [("h", "X", pts(0, 60, [0, 30, 30, 0, 30, 0]))]),
+             "b": probe(60, [("h", "X", pts(0, 60, [0, 30, 30, 30, 30, 0]))])}
+        r = hub.correlate(d, self.NAMES, self.TH, 2)
+        self.assertEqual([(i["kind"], i["t0"], i["t1"]) for i in r["incidents"]], [("target", 60, 300)])
+
+
+class JoinTest(unittest.TestCase):
+    def test_gaps_shorter_than_join_are_one_incident(self):
+        a = pts(0, 10, [30, 0, 0, 0, 30, 0, 0, 0, 0, 0, 0, 0, 30])     # gaps of 40 s and 80 s
+        d = {"a": probe(10, [("h", "X", a)]), "b": probe(10, [("h", "X", a)])}
+        r = hub.correlate(d, {}, {"loss": 1, "jitter": None, "delay": None}, 2, join_s=60)
+        self.assertEqual([(i["t0"], i["t1"]) for i in sorted(r["incidents"], key=lambda x: x["t0"])], [(0, 50), (120, 130)])
+
+
+class ConfigTest(unittest.TestCase):
+    def test_tokens_kept_and_hidden(self):
+        c = config.Config(os.path.join(tempfile.mkdtemp(), "c.json"))
+        c.update({**c.get(), "probes": [{"name": "A", "url": "http://192.0.2.5:8095", "token": "hw_secret"}]})
+        pid = c.get()["probes"][0]["id"]
+        c.update({**c.public(), "probes": [{"id": pid, "name": "A2", "url": "http://192.0.2.5:8095", "token": ""}]})
+        self.assertEqual(c.get()["probes"][0]["token"], "hw_secret")
+        self.assertNotIn("hw_secret", str(c.public()))
+        self.assertTrue(c.public()["probes"][0]["token_set"])
+
+    def test_bad_url(self):
+        with self.assertRaises(config.ConfigError):
+            config.validate({"probes": [{"name": "x", "url": "file:///etc/passwd"}]})
+
+
+if __name__ == "__main__":
+    unittest.main()

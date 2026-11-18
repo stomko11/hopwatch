@@ -203,10 +203,16 @@ class MtrRunner:
                 raise RuntimeError("mtr took too long and was stopped")
             if rid in self.cancelled:
                 status, error = "cancelled", None
-            elif p.returncode != 0:
-                raise RuntimeError((err or out or f"exit {p.returncode}").strip()[:500])
             else:
-                result = json.loads(out)
+                try:                     # mtr can exit non-zero after a send error but still report every hop
+                    result = json.loads(out)
+                except ValueError:
+                    result = None
+                if result is None or not (result.get("report") or {}).get("hubs"):
+                    result = None
+                    raise RuntimeError((err or out or f"exit {p.returncode}").strip()[:500])
+                if p.returncode != 0 and err.strip():
+                    error = "warning: " + err.strip()[:300]
                 dst_loss, hops = summarize(result)
                 meta = {**row, "started": started, "interval": m["interval_s"], "site": c["site_name"] or socket.gethostname(),
                         "public_ip": self.public_ip.get(m["public_ip_url"])}

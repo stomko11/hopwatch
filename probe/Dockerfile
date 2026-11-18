@@ -4,6 +4,7 @@ FROM alpine:3.20
 RUN apk add --no-cache python3 fping mtr tzdata ca-certificates tini
 
 COPY probe/app /app
+COPY shared/*.py /app/
 COPY ui /app/ui
 
 ENV HOPWATCH_PORT=8095 \

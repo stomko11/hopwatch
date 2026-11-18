@@ -313,8 +313,10 @@
     var gridC = HW.cssv('--border'), txtC = HW.cssv('--muted');
     var L = 44, R = 12, T = 12, B = 24, vis = series.filter(function (s) { return !o.hidden[s.name]; });
     var max = 0; vis.forEach(function (s) { s.v.forEach(function (v) { if (v != null && v > max) max = v; }); });
+    if (o.bars) { var tot = {}; vis.forEach(function (s) { s.v.forEach(function (v, i) { tot[s.t[i]] = (tot[s.t[i]] || 0) + (v || 0); if (tot[s.t[i]] > max) max = tot[s.t[i]]; }); }); }
     var nice = function (x) { var p = Math.pow(10, Math.floor(Math.log10(x))), f = x / p; return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * p; };
     max = o.pct ? Math.max(5, Math.min(100, nice(max * 1.1 || 5))) : nice((max || 8) * 1.1);
+    if (o.bars) max = Math.max(4, Math.ceil(max * 1.1 / 4) * 4);     // whole numbers on the axis for counts
     var X = function (t) { return L + (t - o.t0) / (o.t1 - o.t0) * (W - L - R); }, Y = function (v) { return T + (1 - Math.min(v, max) / max) * (H - T - B); };
     c.font = '11px ui-sans-serif,system-ui,sans-serif'; c.textBaseline = 'middle';
     for (var i = 0; i <= 4; i++) { var v = max * i / 4, y = Math.round(Y(v)) + .5; c.strokeStyle = gridC; c.lineWidth = 1; c.setLineDash(i ? [3, 4] : []);
@@ -325,7 +327,16 @@
       var lab = span > 172800 ? p.D + '.' + p.M + '.' + (span > 86400 * 20 ? '' : ' ' + P2f(p.h) + ':' + P2f(p.m)) : P2f(p.h) + ':' + P2f(p.m);
       c.fillStyle = txtC; c.fillText(lab, Math.min(Math.max(X(tt), L + 18), W - R - 18), H - 6); }
     var single = vis.length === 1;
-    vis.forEach(function (s) {
+    if (o.bars) {      // counts per moment: stacked bars read better than lines
+      var base = {};
+      vis.forEach(function (s) {
+        var col = s.color || HW.color(s.name), n = s.t.length, bw = Math.max(2, Math.min(14, (W - L - R) / Math.max(1, span / (o.step || (n > 1 ? s.t[1] - s.t[0] : 60))) * 0.8));
+        c.fillStyle = col;
+        s.v.forEach(function (v, i) { if (!v) return; var b0 = base[s.t[i]] || 0, x = X(s.t[i]), y1 = Y(b0 + v), y0 = Y(b0);
+          c.fillRect(Math.round(x - bw / 2), y1, bw, y0 - y1); base[s.t[i]] = b0 + v; });
+      });
+    }
+    if (!o.bars) vis.forEach(function (s) {
       var col = s.color || HW.color(s.name);
       c.strokeStyle = col; c.lineWidth = single ? 1.8 : 1.4; c.setLineDash(s.dash ? [5, 3] : []); c.lineJoin = 'round';
       c.beginPath(); var pen = false, segs = [], cur = null;

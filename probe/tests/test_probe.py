@@ -7,6 +7,7 @@ import time
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "app"))
+sys.path.insert(1, os.path.join(os.path.dirname(__file__), "..", "..", "shared"))
 
 import auth            # noqa: E402
 import config          # noqa: E402

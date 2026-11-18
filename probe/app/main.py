@@ -16,7 +16,9 @@ import sys
 import threading
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+sys.path.insert(1, os.path.join(HERE, "..", "..", "shared"))     # shared code in a checkout (copied next to the app in the image)
 
 from auth import Auth            # noqa: E402
 from config import VERSION, Config   # noqa: E402

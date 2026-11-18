@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hopwatch Hub</title>
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/ui/hw.css">
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <a class="brand" href="#/"><img src="icon.svg" alt=""><span>Hopwatch Hub<small id="site">…</small></span></a>
+    <nav class="nav" id="nav"></nav>
+    <div class="foot">
+      <div class="row wrapn"><span class="seg" id="tzSeg"></span><button class="btn-s btn-i btn-g" id="themeBtn" title="Light / dark"></button></div>
+      <button class="btn-s" id="loginBtn"></button>
+    </div>
+  </aside>
+  <div class="main">
+    <div class="top"><div><h1 id="title"></h1><div class="sub" id="subtitle"></div></div><span class="grow"></span><div class="row" id="topActions"></div></div>
+    <div id="banner" class="hidden" style="margin:12px 24px 0"></div>
+    <div class="content" id="main"></div>
+  </div>
+</div>
+<script src="/ui/hw.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
