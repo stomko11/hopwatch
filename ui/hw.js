@@ -127,6 +127,25 @@
   };
   HW.download = function (url) { var a = document.createElement('a'); a.href = url; a.download = ''; document.body.appendChild(a); a.click(); a.remove(); };
 
+  /* ------------------------------------------------------------ small settings popover (phones)
+     o: {login: label, onLogin(), onChange()} – times, theme and login in one place */
+  HW.prefs = function (anchor, o) {
+    HW.closePops();
+    var d = document.createElement('div'); d.className = 'drop prefs';
+    d.innerHTML = '<div class="row"><span class="small muted">Times</span><span data-s="tz"></span></div>' +
+      '<div class="row"><span class="small muted">Theme</span><span data-s="th"></span></div>' +
+      (o.login ? '<button data-l>' + o.login + '</button>' : '');
+    document.body.appendChild(d); HW.place(d, anchor, 260);
+    var r = anchor.getBoundingClientRect(); d.style.left = Math.max(8, Math.min(innerWidth - 268, r.right - 260)) + 'px';
+    var close = function () { d.remove(); document.removeEventListener('mousedown', out, true); };
+    var out = function (e) { if (!d.contains(e.target) && !anchor.contains(e.target)) close(); };
+    setTimeout(function () { document.addEventListener('mousedown', out, true); });
+    HW.seg(d.querySelector('[data-s=tz]'), [['local', 'Local'], ['utc', 'UTC']], HW.tz, function (v) { HW.tz = v; HW.ls('tz', v); if (o.onChange) o.onChange(); });
+    HW.seg(d.querySelector('[data-s=th]'), [['dark', 'Dark'], ['light', 'Light']], document.documentElement.getAttribute('data-theme'), function (v) { HW.theme(v); if (o.onChange) o.onChange(); });
+    var l = d.querySelector('[data-l]'); if (l) l.onclick = function () { close(); o.onLogin(); };
+    pops.push({ close: close });
+  };
+
   /* ------------------------------------------------------------ segmented control + switch */
   HW.seg = function (el, items, value, onChange) {
     el.className = 'seg';

@@ -26,6 +26,7 @@
     $('nav').innerHTML = NAV.map(function (n) { return '<a href="#/' + n[0] + '" class="' + (S.view === n[0] ? 'on' : '') + '">' + I(n[1]) + '<span class="lbl">' + n[2] + '</span></a>'; }).join('');
     $('loginBtn').innerHTML = admin() ? I('out') + 'Log out' : S.info && !S.info.auth.password_set ? I('lock') + 'Set password' : I('lock') + 'Log in';
     $('themeBtn').innerHTML = I(document.documentElement.getAttribute('data-theme') === 'light' ? 'moon' : 'sun');
+    $('prefsBtn').innerHTML = I('more');
   }
   function loadInfo() {
     return api('/api/info').then(function (i) {
@@ -53,6 +54,10 @@
   }
   function qs(k) { var m = new RegExp('[?&]' + k + '=([^&]+)').exec(location.hash); return m ? decodeURIComponent(m[1]) : null; }
   HW.seg($('tzSeg'), [['local', 'Local'], ['utc', 'UTC']], HW.tz, function (v) { HW.tz = v; HW.ls('tz', v); route(); });
+  $('prefsBtn').onclick = function () {
+    HW.prefs(this, { login: $('loginBtn').innerHTML, onLogin: function () { $('loginBtn').click(); },
+      onChange: function () { HW.seg($('tzSeg'), [['local', 'Local'], ['utc', 'UTC']], HW.tz, function (v) { HW.tz = v; HW.ls('tz', v); route(); }); route(); } });
+  };
   $('themeBtn').onclick = function () { HW.theme(document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light'); route(); };
   $('loginBtn').onclick = function () {
     if (admin()) api('/api/logout', { method: 'POST' }).then(function () { loadInfo().then(route); });
@@ -131,15 +136,24 @@
     head('Overview', 'Live status of every target over the alert window', '<button class="btn-p" id="runBtn">' + I('play') + 'Run MTR</button>');
     $('runBtn').onclick = function () { mtrDialog([]); };
     var f = HW.lsj('ovf', { q: '', only: 'all', locs: [] });
-    $('main').innerHTML = '<div class="kpis" id="kpis"></div>' +
+    f.range = f.range || 'live';
+    $('main').innerHTML = '<div class="row"><span id="ovR"></span><span class="grow"></span></div><div class="kpis" id="kpis"></div>' +
       '<div class="row"><div class="search" style="width:260px">' + I('search') + '<input id="ovQ" placeholder="Filter by name or IP" value="' + esc(f.q) + '"></div>' +
       '<span id="ovOnly"></span><div id="ovLoc"></div><span class="grow"></span><span class="xs muted" id="ovUpd"></span></div><div class="tiles" id="tiles"></div>';
-    var spark = {}, mtr24 = null, locMs = null;
+    var spark = {}, agg = {}, mtr24 = null, locMs = null;
     var save = function () { HW.ls('ovf', f); draw(); };
+    var RNG = [['live', 'Live'], ['900', '15m'], ['3600', '1h'], ['10800', '3h'], ['21600', '6h'], ['86400', '24h']];
+    HW.seg($('ovR'), RNG, f.range, function (v) { f.range = v; HW.ls('ovf', f); agg = {}; loadSpark(); draw(); });
     $('ovQ').oninput = function () { f.q = this.value; save(); };
     HW.seg($('ovOnly'), [['all', 'All'], ['bad', 'Problems only']], f.only, function (v) { f.only = v; save(); });
     function draw() {
-      var st = S.status; if (!st) return;
+      var st0 = S.status; if (!st0) return;
+      var live = f.range === 'live';
+      // in a range the numbers and colours come from that range; the dot keeps the live state
+      var st = live ? st0 : Object.assign({}, st0, { targets: st0.targets.map(function (t) { var a = agg[t.host]; if (!t.enabled) return t;
+        if (!a) return Object.assign({}, t, { avg: null, loss: null, jitter: null });
+        return Object.assign({}, t, { avg: a.avg, loss: a.loss, jitter: a.jit, maxloss: a.max, live: t.status,
+          status: a.max >= 20 ? 'crit' : a.loss > 0.5 ? 'warn' : a.avg == null && a.loss == null ? 'unknown' : 'ok' }); }) });
       if (!locMs) locMs = HW.ms($('ovLoc'), { options: locOpts(st), value: f.locs, label: 'Locations', placeholder: 'All', onChange: function (v) { f.locs = v; save(); } });
       var locs = {}, order = [];
       st.targets.forEach(function (t) { if (!locs[t.location]) { locs[t.location] = []; order.push(t.location); } locs[t.location].push(t); });
@@ -166,16 +180,17 @@
           '<button class="btn-xs" data-lm="' + esc(JSON.stringify(hosts)) + '">' + I('route') + 'MTR</button></div>' +
           ts.map(function (t) {
             var sp = spark[t.host] || { v: [], l: [] };
-            return '<div class="ipr"><div class="ip"><span class="dot ' + t.status + (t.status === 'ok' ? ' live' : '') + '"></span><span class="ell" title="' + esc(t.host) + '">' + esc(t.host) + '</span>' + (tcpOk(t) ? '<span class="tag tcp" title="TCP ' + t.tcp.port + ' answers: TCP MTR possible">TCP</span>' : '') + '</div>' +
+            var ds = live ? t.status : t.live;
+            return '<div class="ipr"><div class="ip"><span class="dot ' + ds + (ds === 'ok' ? ' live' : '') + '" title="now: ' + (STATUS[ds] || ds) + '"></span><span class="ell" title="' + esc(t.host) + '">' + esc(t.host) + '</span>' + (tcpOk(t) ? '<span class="tag tcp" title="TCP ' + t.tcp.port + ' answers: TCP MTR possible">TCP</span>' : '') + '</div>' +
               '<div>' + HW.spark(sp.v, sp.l, t.status === 'ok' ? 'var(--accent)' : 'var(--' + (t.status === 'warn' ? 'warn' : 'bad') + ')') + '</div>' +
               '<div class="r">' + (t.status === 'down' ? '<span class="down">down</span>' : t.avg == null ? '<span class="faint">–</span>' : HW.fnum(t.avg) + '<span class="faint"> ms</span>') + '</div>' +
-              '<div class="r ' + (t.loss > 0 ? (RANK[t.status] >= 3 ? 'bad' : 'warn') : 'faint') + '">' + (t.loss == null ? '–' : HW.fnum(t.loss, 0) + '%') + '</div>' +
+              '<div class="r ' + (t.loss > 0 ? (RANK[t.status] >= 3 ? 'bad' : 'warn') : 'faint') + '"' + (!live && t.maxloss ? ' title="average loss; worst moment ' + HW.fnum(t.maxloss, 0) + '%"' : '') + '>' + (t.loss == null ? '–' : HW.fnum(t.loss, t.loss > 0 && t.loss < 1 ? 1 : 0) + '%') + '</div>' +
               '<div class="r faint jit" title="jitter">±' + HW.fnum(t.jitter) + '</div>' +
               '<div><button class="btn-xs btn-g btn-i" data-ip="' + esc(t.host) + '" title="Actions">' + I('more') + '</button></div></div>';
           }).join('') + '</div>';
       }).join('');
       $('tiles').innerHTML = html || '<div class="card"><div class="empty">' + (st.targets.length ? 'Nothing matches the filter.' : 'No targets yet. Add them in <a href="#/settings">Settings</a>.') + '</div></div>';
-      $('ovUpd').textContent = 'last ' + st.window_s + ' s · updated ' + HW.ftime(st.now);
+      $('ovUpd').textContent = (live ? 'last ' + st.window_s + ' s' : 'average over the last ' + RNG.filter(function (r) { return r[0] === f.range; })[0][1] + ', worst moment in the tooltip') + ' · updated ' + HW.ftime(st.now);
       [].forEach.call($('tiles').querySelectorAll('[data-lm]'), function (b) {
         b.onclick = function () { var hs = JSON.parse(b.dataset.lm); HW.menu(b, [
           { label: 'MTR all ' + hs.length + ' IPs · ICMP', icon: 'play', onClick: function () { quickMtr(hs, 'icmp'); } },
@@ -194,12 +209,18 @@
       });
     }
     every(function () { status().then(draw).catch(fail); }, 3000);
-    every(function () {
-      var t1 = Date.now() / 1000;
-      api('/api/series?from=' + Math.floor(t1 - 900) + '&to=' + Math.ceil(t1) + '&points=60&group=host').then(function (d) {
-        d.series.forEach(function (s) { spark[s.host] = { v: s.points.map(function (p) { return p[1]; }), l: s.points.map(function (p) { return p[2]; }) }; }); draw();
+    function loadSpark() {
+      var t1 = Date.now() / 1000, span = f.range === 'live' ? 900 : +f.range;
+      api('/api/series?from=' + Math.floor(t1 - span) + '&to=' + Math.ceil(t1) + '&points=60&group=host').then(function (d) {
+        d.series.forEach(function (s) {
+          var v = s.points.map(function (p) { return p[1]; }), l = s.points.map(function (p) { return p[2]; }), j = s.points.map(function (p) { return p[3]; });
+          spark[s.host] = { v: v, l: l };
+          var mean = function (a) { a = a.filter(function (x) { return x != null; }); return a.length ? a.reduce(function (x, y) { return x + y; }, 0) / a.length : null; };
+          agg[s.host] = { avg: mean(v), loss: mean(l), jit: mean(j), max: Math.max.apply(null, l.filter(function (x) { return x != null; }).concat([0])) };
+        }); draw();
       }).catch(function () { /* sparklines are optional */ });
-    }, 15000);
+    }
+    every(loadSpark, 15000);
     every(function () {
       api('/api/mtr?limit=2000&from=' + Math.floor(Date.now() / 1000 - 86400)).then(function (r) {
         mtr24 = { n: r.runs.length, auto: r.runs.filter(function (x) { return x.trig === 'auto'; }).length }; draw(); }).catch(function () { /* optional */ });

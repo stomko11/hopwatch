@@ -96,7 +96,7 @@ def _series(h, q, group="host"):
             qs += f"&{k}=" + urllib.parse.quote(q[k])
     ps = probes(h, q)
     key = ("series", qs, tuple(p["id"] for p in ps))
-    ttl = 10 if t1 > time.time() - 120 else 300
+    ttl = 15 if t1 > time.time() - 120 else 300
     return ps, t0, t1, h.app.cache.get(key, ttl, lambda: hub.each(ps, lambda p: hub.call(p, qs, timeout=60)))
 
 
@@ -118,6 +118,72 @@ def api_correlate(h, q, _):
                 "errors": {names[pid]: d["error"] for pid, d in res.items() if "error" in d},
                 "min_sites": k, "thresholds": _th(q, c)})
     return out
+
+
+def api_overview(h, q, _):
+    """Everything the overview needs for a time range in one call:
+    per site and moment: average loss over all targets, latency above each target's own normal, jitter;
+    the moments several sites / one site saw a problem; and per location and site the range values."""
+    c = h.app.cfg.get()
+    ps, t0, t1, res = _series(h, q, "host")
+    names = {p["id"]: p["name"] for p in ps}
+    data = {pid: d for pid, d in res.items() if "error" not in d}
+    k = c["correlate"]
+    corr = hub.correlate(data, names, _th({}, c), min(k["min_sites"], max(1, len(data))), k["site_share"] / 100)
+    step, grid, locs = hub.align(data)
+    normal = {hst: {p: hub._median([v[0] for v in grid[hst].get(p, {}).values()]) for p in data} for hst in grid}
+    lines = {}
+    for p in data:
+        acc = {}
+        for hst, by in grid.items():
+            base = normal[hst].get(p)
+            for t, (avg, loss, jit) in by.get(p, {}).items():
+                a = acc.setdefault(t, [0.0, 0, 0.0, 0, 0.0, 0])
+                if loss is not None:
+                    a[0] += loss
+                    a[1] += 1
+                if avg is not None and base is not None:
+                    a[2] += max(0.0, avg - base)
+                    a[3] += 1
+                if jit is not None:
+                    a[4] += jit
+                    a[5] += 1
+        ts = sorted(acc)
+        lines[p] = {"t": ts, "loss": [round(acc[t][0] / acc[t][1], 2) if acc[t][1] else None for t in ts],
+                    "excess": [round(acc[t][2] / acc[t][3], 2) if acc[t][3] else None for t in ts],
+                    "jitter": [round(acc[t][4] / acc[t][5], 2) if acc[t][5] else None for t in ts]}
+    verdict = {}
+    for i in corr["incidents"]:
+        v = verdict.setdefault(i["location"], {"target": set(), "one": set()})
+        (v["target"] if i["kind"] == "target" else v["one"]).update(i["site_names"])
+    rows = {}
+    for hst, by in grid.items():
+        loc = locs[hst]
+        r = rows.setdefault(loc, {"location": loc, "hosts": [], "by": {}})
+        r["hosts"].append(hst)
+        for p, pts in by.items():
+            b = r["by"].setdefault(p, {"avg": [], "loss": [], "jit": []})
+            for avg, loss, jit in pts.values():
+                if avg is not None:
+                    b["avg"].append(avg)
+                if loss is not None:
+                    b["loss"].append(loss)
+                if jit is not None:
+                    b["jit"].append(jit)
+    out_rows = []
+    for loc, r in sorted(rows.items()):
+        by = {}
+        for p, b in r["by"].items():
+            by[p] = {"avg": round(sum(b["avg"]) / len(b["avg"]), 2) if b["avg"] else None,
+                     "loss": round(sum(b["loss"]) / len(b["loss"]), 2) if b["loss"] else None,
+                     "max_loss": round(max(b["loss"]), 1) if b["loss"] else None,
+                     "jitter": round(sum(b["jit"]) / len(b["jit"]), 2) if b["jit"] else None}
+        v = verdict.get(loc, {"target": set(), "one": set()})
+        out_rows.append({"location": loc, "hosts": sorted(r["hosts"]), "by": by,
+                         "several": sorted(v["target"]), "one": sorted(v["one"] - v["target"])})
+    return {"from": t0, "to": t1, "step": step, "probes": [{"id": p["id"], "name": p["name"]} for p in ps],
+            "lines": lines, "simultaneous": corr["buckets"], "locations": out_rows,
+            "errors": {names[pid]: d["error"] for pid, d in res.items() if "error" in d}}
 
 
 def api_series(h, q, _):
@@ -279,6 +345,7 @@ ROUTES = {
     ("GET", "/api/info"): (api_info, "public"),
     ("GET", "/api/live"): (api_live, "view"),
     ("GET", "/api/correlate"): (api_correlate, "view"),
+    ("GET", "/api/overview"): (api_overview, "view"),
     ("GET", "/api/series"): (api_series, "view"),
     ("GET", "/api/mtr"): (api_mtr_list, "view"),
     ("GET", "/api/run"): (api_run, "view"),

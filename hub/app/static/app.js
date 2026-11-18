@@ -29,6 +29,7 @@
     $('nav').innerHTML = NAV.map(function (n) { return '<a href="#/' + n[0] + '" class="' + (S.view === n[0] ? 'on' : '') + '">' + I(n[1]) + '<span class="lbl">' + n[2] + '</span></a>'; }).join('');
     $('loginBtn').innerHTML = admin() ? I('out') + 'Log out' : S.info && !S.info.auth.password_set ? I('lock') + 'Set password' : I('lock') + 'Log in';
     $('themeBtn').innerHTML = I(document.documentElement.getAttribute('data-theme') === 'light' ? 'moon' : 'sun');
+    $('prefsBtn').innerHTML = I('more');
   }
   function loadInfo() { return api('/api/info').then(function (i) { S.info = i; $('site').textContent = i.site; document.title = i.site; nav(); return i; }); }
   function fail(e) {
@@ -48,6 +49,10 @@
     ({ overview: vOverview, incidents: vIncidents, compare: vCompare, mtr: vMtr, run: vRun, evidence: vEvidence, settings: vSettings }[S.view] || vOverview)();
   }
   HW.seg($('tzSeg'), [['local', 'Local'], ['utc', 'UTC']], HW.tz, function (v) { HW.tz = v; HW.ls('tz', v); route(); });
+  $('prefsBtn').onclick = function () {
+    HW.prefs(this, { login: $('loginBtn').innerHTML, onLogin: function () { $('loginBtn').click(); },
+      onChange: function () { HW.seg($('tzSeg'), [['local', 'Local'], ['utc', 'UTC']], HW.tz, function (v) { HW.tz = v; HW.ls('tz', v); route(); }); route(); } });
+  };
   $('themeBtn').onclick = function () { HW.theme(document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light'); route(); };
   $('loginBtn').onclick = function () {
     if (admin()) api('/api/logout', { method: 'POST' }).then(function () { loadInfo().then(route); });
@@ -111,49 +116,89 @@
     }).catch(fail);
   }
 
-  /* ------------------------------------------------------------ overview: locations x sites */
+  /* ------------------------------------------------------------ overview: charts + locations x sites */
+  var OV_RANGES = [['live', 'Live'], ['900', '15m'], ['3600', '1h'], ['10800', '3h'], ['21600', '6h'], ['86400', '24h']];
   function vOverview() {
-    head('Overview', 'Every location as seen from every site, right now', '<button class="btn-p" id="runBtn">' + I('play') + 'MTR from all sites</button>');
+    head('Overview', 'Every location as seen from every site', '<button class="btn-p" id="runBtn">' + I('play') + '<span>MTR from all sites</span></button>');
     $('runBtn').onclick = function () { mtrDialog([]); };
-    var f = HW.lsj('hovf', { q: '', only: 'all', locs: [] }), locMs = null;
-    $('main').innerHTML = '<div class="kpis" id="kpis"></div><div class="row" id="pstrip"></div>' +
+    var f = HW.lsj('hovf', { q: '', only: 'all', locs: [] });
+    f.range = f.range || 'live';
+    var locMs = null, ov = null, hidden = { loss: {}, ex: {}, jit: {}, sim: {} };
+    $('main').innerHTML = '<div class="row"><span id="ovR"></span><span class="grow"></span><span class="xs muted" id="ovUpd"></span></div><div class="kpis" id="kpis"></div><div class="row" id="pstrip"></div>' +
+      '<div class="cgrid">' + [['loss', 'Packet loss', 'average over all targets, % · one line per site'], ['ex', 'Latency above normal', 'ms over each target\u2019s own usual latency'],
+        ['jit', 'Jitter', 'average over all targets, ms'], ['sim', 'Seen at the same time', 'IPs over the limits: red = several sites, amber = one site, purple = one site\u2019s link']].map(function (c) {
+        return '<div class="card"><div class="hd"><h2>' + c[1] + '</h2><span class="sub">' + c[2] + '</span></div><div class="bd"><div id="oc_' + c[0] + '"><div class="empty" style="height:150px;display:flex;align-items:center;justify-content:center">Loading…</div></div></div></div>'; }).join('') + '</div>' +
       '<div class="card"><div class="hd"><h2>Locations</h2><span class="sub" id="ovSub"></span></div><div class="bd col gap12"><div class="row"><div class="search" style="width:240px">' + I('search') + '<input id="ovQ" placeholder="Filter" value="' + esc(f.q) + '"></div><span id="ovOnly"></span><div id="ovL"></div></div><div class="tw" id="mx"></div></div></div>';
     $('ovQ').oninput = function () { f.q = this.value.toLowerCase(); HW.ls('hovf', f); draw(); };
     HW.seg($('ovOnly'), [['all', 'All'], ['bad', 'Problems only']], f.only, function (v) { f.only = v; HW.ls('hovf', f); draw(); });
+    HW.seg($('ovR'), OV_RANGES, f.range, function (v) { f.range = v; HW.ls('hovf', f); ov = null; loadOv(); draw(); });
+    function rangeSec() { return f.range === 'live' ? 3600 : +f.range; }
+    function charts() {
+      if (!ov) return;
+      var t1 = ov.to, t0 = ov.from, names = {}; ov.probes.forEach(function (p) { names[p.id] = p.name; });
+      var order = ov.probes.map(function (p) { return p.id; });
+      var mk = function (k) { return order.filter(function (p) { return ov.lines[p]; }).map(function (p, i) { var l = ov.lines[p];
+        return { name: names[p], color: HW.color('site|' + p), dash: i % 2 === 1, t: l.t, v: l[k] }; }); };
+      var o = function (key, unit, pct, extra) { return Object.assign({ t0: t0, t1: t1, unit: unit, pct: pct, height: 150, legend: true, hidden: hidden[key],
+        onZoom: function (a, b) { location.hash = '#/incidents?from=' + Math.floor(a) + '&to=' + Math.ceil(b); } }, extra || {}); };
+      HW.chart($('oc_loss'), mk('loss'), o('loss', '%', true));
+      HW.chart($('oc_ex'), mk('excess'), o('ex', 'ms'));
+      HW.chart($('oc_jit'), mk('jitter'), o('jit', 'ms'));
+      var t = ov.simultaneous.map(function (b) { return b[0]; });
+      HW.chart($('oc_sim'), [{ name: 'Several sites', color: HW.cssv('--bad'), t: t, v: ov.simultaneous.map(function (b) { return b[1]; }) },
+        { name: 'One site', color: HW.cssv('--warn'), t: t, v: ov.simultaneous.map(function (b) { return b[2]; }) },
+        { name: 'Site link', color: HW.cssv('--purple'), t: t, v: ov.simultaneous.map(function (b) { return b[3]; }) }], o('sim', 'IPs', false, { bars: true, step: ov.step }));
+    }
+    function loadOv() {
+      var t1 = Math.floor(Date.now() / 15000) * 15, W = ($('oc_loss') && $('oc_loss').clientWidth) || 600;   // rounded: repeated loads hit the hub's cache
+      api('/api/overview?from=' + (t1 - rangeSec()) + '&to=' + t1 + '&points=' + (W > 500 ? 200 : 120)).then(function (r) { ov = r; charts(); draw(); }).catch(fail);
+    }
     function draw() {
       var l = S.live; if (!l) return;
-      var ps = l.probes, K = Math.min(l.correlate.min_sites, Math.max(1, okProbes(l).length));
+      var ps = l.probes, K = Math.min(l.correlate.min_sites, Math.max(1, okProbes(l).length)), live = f.range === 'live';
+      if (!live && !ov) return;
       var locs = {}, order = [];
-      ps.forEach(function (p) { (p.targets || []).forEach(function (t) {
-        var L = locs[t.location]; if (!L) { L = locs[t.location] = { hosts: {}, by: {} }; order.push(t.location); }
-        L.hosts[t.host] = 1; var c = L.by[p.id] = L.by[p.id] || { st: 'disabled', avg: [], loss: 0, n: 0 };
-        if (RANK[t.status] > RANK[c.st]) c.st = t.status; if (t.avg != null) c.avg.push(t.avg); c.loss = Math.max(c.loss, t.loss || 0); c.n++; }); });
+      if (live) {
+        ps.forEach(function (p) { (p.targets || []).forEach(function (t) {
+          var L = locs[t.location]; if (!L) { L = locs[t.location] = { hosts: {}, by: {} }; order.push(t.location); }
+          L.hosts[t.host] = 1; var c = L.by[p.id] = L.by[p.id] || { st: 'disabled', avg: [], loss: 0 };
+          if (RANK[t.status] > RANK[c.st]) c.st = t.status; if (t.avg != null) c.avg.push(t.avg); c.loss = Math.max(c.loss, t.loss || 0); }); });
+        Object.keys(locs).forEach(function (x) { var L = locs[x]; Object.keys(L.by).forEach(function (p) { var c = L.by[p]; c.avgv = c.avg.length ? c.avg.reduce(function (a, b) { return a + b; }, 0) / c.avg.length : null; }); });
+      } else {
+        ov.locations.forEach(function (r) { var L = locs[r.location] = { hosts: {}, by: {}, several: r.several, one: r.one }; order.push(r.location);
+          r.hosts.forEach(function (h) { L.hosts[h] = 1; });
+          Object.keys(r.by).forEach(function (p) { var b = r.by[p]; L.by[p] = { avgv: b.avg, loss: b.loss || 0, max: b.max_loss || 0,
+            st: (b.max_loss || 0) >= 20 ? 'crit' : (b.loss || 0) > 0.5 ? 'warn' : b.avg == null ? 'unknown' : 'ok' }; }); });
+      }
       order.sort();
       if (!locMs) locMs = HW.ms($('ovL'), { options: order.map(function (x) { return { value: x, label: x }; }), value: f.locs, label: 'Locations', onChange: function (v) { f.locs = v; HW.ls('hovf', f); draw(); } });
-      var verdict = function (L) { var bad = ps.filter(function (p) { return L.by[p.id] && RANK[L.by[p.id].st] >= 2; });
-        return bad.length >= K && K > 1 ? ['bad', 'Seen from ' + bad.length + ' sites', bad] : bad.length ? ['warn', 'Only from ' + bad.map(function (p) { return p.name; }).join(', '), bad] : ['ok', 'OK', bad]; };
+      var verdict = function (L) {
+        if (!live) return L.several.length ? ['bad', 'Seen from ' + L.several.length + ' sites'] : L.one.length ? ['warn', 'Only from ' + L.one.join(', ')] : ['ok', 'OK'];
+        var bad = ps.filter(function (p) { return L.by[p.id] && RANK[L.by[p.id].st] >= 2; });
+        return bad.length >= K && K > 1 ? ['bad', 'Seen from ' + bad.length + ' sites'] : bad.length ? ['warn', 'Only from ' + bad.map(function (p) { return p.name; }).join(', ')] : ['ok', 'OK']; };
       var multi = 0, single = 0;
       order.forEach(function (x) { var v = verdict(locs[x]); if (v[0] === 'bad') multi++; else if (v[0] === 'warn') single++; });
       var online = ps.filter(function (p) { return !p.error || p.targets; });
-      var running = ps.reduce(function (a, p) { return a + (p.mtr ? p.mtr.running.length : 0); }, 0);
+      var running = ps.reduce(function (a, p) { return a + (p.mtr ? p.mtr.running.length : 0); }, 0), rl = live ? 'now' : 'in the last ' + OV_RANGES.filter(function (r) { return r[0] === f.range; })[0][1];
       $('kpis').innerHTML = kpi('server', 'Probes online', '<span class="' + (online.length < ps.length ? 'warn' : 'ok') + '">' + online.length + '</span><span class="small muted"> / ' + ps.length + '</span>', ps.filter(function (p) { return p.error && !p.targets; }).map(function (p) { return esc(p.name) + ' offline'; }).join(', ') || 'all answering') +
-        kpi('alert', 'Seen from several sites', '<span class="' + (multi ? 'bad' : 'ok') + '">' + multi + '</span>', 'locations, likely the target side') +
-        kpi('info', 'Seen from one site only', '<span class="' + (single ? 'warn' : 'ok') + '">' + single + '</span>', 'locations, likely that site\u2019s path') +
+        kpi('alert', 'Seen from several sites', '<span class="' + (multi ? 'bad' : 'ok') + '">' + multi + '</span>', 'locations ' + rl + ', likely the target side') +
+        kpi('info', 'Seen from one site only', '<span class="' + (single ? 'warn' : 'ok') + '">' + single + '</span>', 'locations ' + rl + ', likely that site\u2019s path') +
         kpi('route', 'MTR running', running, 'on all probes');
       $('pstrip').innerHTML = ps.map(function (p) { var bad = (p.targets || []).filter(function (t) { return RANK[t.status] >= 2; }).length;
-        return '<span class="pill ' + (p.error && !p.targets ? 'bad' : bad ? 'warn' : 'ok') + '" title="' + esc(p.error || p.url) + '">' + I('server') + esc(p.name) + (p.targets ? ' · ' + p.targets.length + ' targets' + (bad ? ' · ' + bad + ' with problems' : '') : ' · ' + esc(p.error || 'offline')) + '</span>'; }).join('');
+        return '<span class="pill ' + (p.error && !p.targets ? 'bad' : bad ? 'warn' : 'ok') + '" title="' + esc(p.error || p.url) + '">' + I('server') + esc(p.name) + (p.targets ? ' · ' + p.targets.length + ' targets' + (bad ? ' · ' + bad + ' with problems now' : '') : ' · ' + esc(p.error || 'offline')) + '</span>'; }).join('');
       var rows = order.filter(function (x) { var L = locs[x];
         if (f.locs.length && f.locs.indexOf(x) < 0) return false;
         if (f.only === 'bad' && verdict(L)[0] === 'ok') return false;
         return !f.q || x.toLowerCase().indexOf(f.q) >= 0 || Object.keys(L.hosts).some(function (h) { return h.indexOf(f.q) >= 0; }); })
         .sort(function (a, b) { var r = { bad: 2, warn: 1, ok: 0 }; return r[verdict(locs[b])[0]] - r[verdict(locs[a])[0]] || a.localeCompare(b); });
-      $('ovSub').textContent = order.length + ' locations · ' + ps.length + ' sites · updated ' + HW.ftime(l.now);
+      $('ovSub').textContent = order.length + ' locations · ' + ps.length + ' sites · ' + (live ? 'live, last ' + l.probes.filter(function (p) { return p.window_s; }).map(function (p) { return p.window_s; })[0] + ' s' : 'average and worst ' + rl);
+      $('ovUpd').textContent = 'updated ' + HW.ftime(l.now);
       $('mx').innerHTML = '<table class="table"><thead><tr><th>Location</th>' + ps.map(function (p) { return '<th>' + esc(p.name) + '</th>'; }).join('') + '<th>Verdict</th><th class="w0"></th></tr></thead><tbody>' +
         rows.map(function (x) { var L = locs[x], v = verdict(L);
           return '<tr><td><b>' + esc(x) + '</b> <span class="xs muted">' + Object.keys(L.hosts).length + ' IP</span></td>' + ps.map(function (p) { var c = L.by[p.id];
             if (!c) return '<td class="faint">–</td>';
-            var avg = c.avg.length ? c.avg.reduce(function (a, b) { return a + b; }, 0) / c.avg.length : null;
-            return '<td><span class="row wrapn gap4"><span class="dot ' + c.st + '"></span><span class="num">' + (c.st === 'down' ? '<span class="down">down</span>' : HW.fnum(avg) + '<span class="faint"> ms</span>') + '</span>' + (c.loss > 0 ? '<span class="num ' + (RANK[c.st] >= 3 ? 'bad' : 'warn') + '">' + HW.fnum(c.loss, 0) + '%</span>' : '') + '</span></td>'; }).join('') +
+            return '<td><span class="row wrapn gap4"><span class="dot ' + c.st + '"></span><span class="num">' + (c.st === 'down' ? '<span class="down">down</span>' : HW.fnum(c.avgv) + '<span class="faint"> ms</span>') + '</span>' +
+              (c.loss > 0 ? '<span class="num ' + (RANK[c.st] >= 3 ? 'bad' : 'warn') + '" title="' + (live ? 'loss now' : 'average loss; worst moment ' + HW.fnum(c.max, 0) + '%') + '">' + HW.fnum(c.loss, c.loss < 1 ? 1 : 0) + '%' + (!live && c.max > c.loss ? '<span class="faint"> ↑' + HW.fnum(c.max, 0) + '</span>' : '') + '</span>' : '') + '</span></td>'; }).join('') +
             '<td><span class="pill ' + v[0] + '">' + esc(v[1]) + '</span></td><td class="w0"><button class="btn-xs btn-g btn-i" data-loc="' + esc(x) + '">' + I('more') + '</button></td></tr>'; }).join('') + '</tbody></table>';
       [].forEach.call($('mx').querySelectorAll('[data-loc]'), function (b) { b.onclick = function () { var x = b.dataset.loc, hs = Object.keys(locs[x].hosts);
         HW.menu(b, [{ label: 'Compare sites on a chart', icon: 'chart', onClick: function () { location.hash = '#/compare?loc=' + encodeURIComponent(x); } },
@@ -161,6 +206,8 @@
           { label: 'Incidents for this location', icon: 'alert', onClick: function () { location.hash = '#/incidents?loc=' + encodeURIComponent(x); } }]); }; });
     }
     every(function () { live().then(draw).catch(fail); }, 4000);
+    every(loadOv, 20000);
+    window.onresize = function () { if (S.view === 'overview') charts(); };
   }
 
   /* ------------------------------------------------------------ incidents */
