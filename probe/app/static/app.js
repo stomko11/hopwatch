@@ -1,8 +1,15 @@
 /* Hopwatch Probe web UI (uses the shared kit in /ui/hw.js). */
 'use strict';
 (function () {
-  var $ = HW.$, esc = HW.esc, I = HW.icon, api = HW.api;
-  var S = { info: null, status: null, cfg: null, timers: [], view: '' };
+  var $ = HW.$, esc = HW.esc, I = HW.icon;
+  var S = { info: null, status: null, cfg: null, timers: [], view: '', gen: 0 };
+  /* Answers that come back after the user moved to another page are dropped: the page they were for
+     is gone, and drawing them would write into elements that no longer exist. */
+  var api = function (path, opt) {
+    var gen = S.gen;
+    return HW.api(path, opt).then(function (r) { return gen === S.gen ? r : new Promise(function () { /* never */ }); },
+      function (e) { if (gen !== S.gen) return new Promise(function () { /* never */ }); throw e; });
+  };
   var NAV = [['overview', 'grid', 'Overview'], ['charts', 'chart', 'Charts'], ['mtr', 'route', 'MTR'], ['events', 'bell', 'Events'],
     ['evidence', 'box', 'Evidence'], ['settings', 'gear', 'Settings']];
   var TRIG = { manual: ['Manual', 'info'], auto: ['Automatic', 'warn'], schedule: ['Scheduled', 'purple'] };
@@ -29,10 +36,13 @@
   }
   function fail(e) {
     if (e && e.status === 401) return loadInfo().then(route);
-    var b = $('banner'); b.className = 'banner'; b.innerHTML = I('alert') + 'Cannot reach the probe: ' + esc(e && e.message);
+    var net = e && !e.status && /fetch|network|load failed/i.test(e.message || '');
+    if (!net && !(e && e.status) && window.console) console.error(e);
+    var b = $('banner'); b.className = 'banner';
+    b.innerHTML = I('alert') + (net ? 'Cannot reach the probe – check that the container runs.' : e && e.status ? esc(e.message) : 'Something went wrong on this page: ' + esc(e && e.message) + ' – reload the page; if it happens again, please report it.');
   }
   function route() {
-    clearTimers(); HW.closePops(); HW.closeModal();
+    S.gen++; clearTimers(); HW.closePops(); HW.closeModal(); $('banner').className = S.info && S.info.error ? 'banner' : 'hidden';
     var h = location.hash.replace(/^#\/?/, '').split('?')[0].split('/');
     S.view = h[0] || 'overview'; nav();
     $('main').innerHTML = '';
