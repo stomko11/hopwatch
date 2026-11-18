@@ -171,7 +171,8 @@ def api_run_file(h, q, _):
         "/api/mtr/export?format=" + (q.get("format") or "zip") + "&ids=" + ",".join(str(int(x)) for x in _list(q, "ids"))
     data, ctype, disp = hub.call(p, path, raw=True, timeout=60)
     name = disp.split("filename=")[-1].strip('"') if "filename=" in disp else "mtr.txt"
-    h._send(200, data, ctype or "application/octet-stream", {"Content-Disposition": f'attachment; filename="{p["name"]}-{name}"'})
+    name = "".join(ch for ch in name if ch.isalnum() or ch in "-_.") or "mtr.txt"     # never trust a header from elsewhere
+    h._send(200, data, ctype or "application/octet-stream", {"Content-Disposition": f'attachment; filename="{"".join(ch for ch in p["name"] if ch.isalnum() or ch in "-_") or "probe"}-{name}"'})
 
 
 def api_mtr_start(h, q, _):
