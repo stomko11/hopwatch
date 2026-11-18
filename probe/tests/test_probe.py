@@ -136,6 +136,11 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual([config.place(x) for x in t], ["EXTERNAL", "AMS", "AMS", "192.0.2.3"])
         self.assertEqual(config.label(t[0]), "Cloudflare DNS (EXTERNAL)")
         self.assertEqual([r["name"] for r in config.validate({})["roles"]], ["FX", "ISP", "EXTERNAL"])
+        c = config.validate({"roles": [{"name": "FX", "enabled": False}, {"name": "ISP"}],
+                             "targets": [{"location": "AMS", "host": "192.0.2.1", "role": "FX"},
+                                         {"location": "AMS", "host": "192.0.2.2", "role": "ISP"}]})
+        self.assertEqual([config.active(t, c) for t in c["targets"]], [False, True])     # role off pauses its targets
+        self.assertEqual([r["upstream"] for r in c["roles"]], [False, True])              # ISP edge from the name
 
     def test_limits(self):
         with self.assertRaises(config.ConfigError):

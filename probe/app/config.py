@@ -10,7 +10,7 @@ import os
 import re
 import threading
 
-VERSION = "0.2.5"
+VERSION = "0.2.6"
 
 DEFAULTS = {
     "site_name": "",
@@ -20,9 +20,10 @@ DEFAULTS = {
     ],
     # A target has an optional name, an optional location (the DC it is in) and a role (its group).
     # Within a location the roles stay apart: "AMS · ISP" and "AMS · FX". Without a location the
-    # role alone is the group. A role marked "upstream" is the ISP edge: when it is clean and the
-    # others of the location are not, the problem is past the ISP.
-    "roles": [{"name": "FX", "upstream": False}, {"name": "ISP", "upstream": True}, {"name": "EXTERNAL", "upstream": False}],
+    # role alone is the group. A role turned off pauses all its targets. A role named ISP (or GW,
+    # gateway, upstream) is the ISP edge: when it is clean and the others of the location are not,
+    # the problem is past the ISP.
+    "roles": [{"name": "FX", "enabled": True}, {"name": "ISP", "enabled": True}, {"name": "EXTERNAL", "enabled": True}],
     "ping": {"interval_ms": 1000, "timeout_ms": 1000, "size": 56},
     "alerts": {"window_s": 60, "loss_warn": 5, "loss_crit": 20, "rtt_warn_ms": 0, "rtt_crit_ms": 0},
     # Automatic MTR: when something goes wrong (and once more when it is fixed), so there is evidence
@@ -99,6 +100,19 @@ def _merge(base, over):
     return out
 
 
+EDGE_RE = re.compile(r"^(isp|gw|gateway|upstream)", re.I)
+
+
+def is_edge(role: str) -> bool:
+    """A role named ISP / GW / gateway / upstream is the ISP's gateway in front of a location."""
+    return bool(role and EDGE_RE.match(role))
+
+
+def active(t, c) -> bool:
+    """Pinged: the target is on and so is its role."""
+    return bool(t["enabled"]) and not any(r["name"] == t.get("role") and not r.get("enabled", True) for r in c.get("roles") or [])
+
+
 def place(t) -> str:
     """Where a target belongs on the overview: its location, else its role, else its name or IP."""
     return t.get("location") or t.get("role") or t.get("name") or t["host"]
@@ -150,7 +164,7 @@ def validate(cfg: dict) -> dict:
         if n.lower() in rnames:
             raise ConfigError(f"role '{n}' is listed twice")
         rnames.add(n.lower())
-        roles.append({"name": n, "upstream": bool(r.get("upstream"))})
+        roles.append({"name": n, "enabled": bool(r.get("enabled", True)), "upstream": is_edge(n)})
     if len(roles) > 20:
         raise ConfigError("at most 20 roles")
     c["roles"] = roles

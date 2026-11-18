@@ -6,7 +6,7 @@ import re
 import secrets
 import threading
 
-VERSION = "0.2.5"
+VERSION = "0.2.6"
 
 DEFAULTS = {
     "name": "Hopwatch Hub",

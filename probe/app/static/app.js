@@ -234,10 +234,12 @@
   }
   /* targets of a location in role order: the ISP edge first, then the order of the roles list */
   function byRole(ts, roles) {
-    var ord = {}; (roles || []).forEach(function (r, i) { ord[r.name] = (r.upstream ? 0 : 100) + i; });
+    var ord = {}; (roles || []).forEach(function (r, i) { ord[r.name] = (isEdge(r.name) ? 0 : 100) + i; });
     return ts.slice().sort(function (a, b) { var x = a.role ? (ord[a.role] == null ? 500 : ord[a.role]) : 999, y = b.role ? (ord[b.role] == null ? 500 : ord[b.role]) : 999; return x - y; });
   }
-  function roleUp(roles, name) { return (roles || []).some(function (r) { return r.name === name && r.upstream; }); }
+  function roleUp(roles, name) { return isEdge(name); }
+  /* same rule as the server: a role named ISP / GW / gateway / upstream is the ISP edge */
+  function isEdge(name) { return /^(isp|gw|gateway|upstream)/i.test(name || ''); }
   function kpi(ic, l, v, s) { return '<div class="kpi"><div class="l">' + I(ic) + esc(l) + '</div><div class="v">' + v + '</div><div class="s">' + (s || '') + '</div></div>'; }
 
   /* ------------------------------------------------------------ charts */
@@ -629,7 +631,7 @@
         }
         if (tab === 'import') {
           var ro = function (id, cur) { return '<select id="' + id + '"><option value="">–</option>' + (D.roles || []).map(function (r) { return '<option' + (r.name === cur ? ' selected' : '') + '>' + esc(r.name) + '</option>'; }).join('') + '</select>'; };
-          var up = (D.roles || []).filter(function (r) { return r.upstream; })[0], own = (D.roles || []).filter(function (r) { return !r.upstream; })[0],
+          var up = (D.roles || []).filter(function (r) { return isEdge(r.name); })[0], own = (D.roles || []).filter(function (r) { return !isEdge(r.name) && !/^ext/i.test(r.name); })[0],
             ext = (D.roles || []).filter(function (r) { return /^ext/i.test(r.name); })[0];
           B.innerHTML = card('Targets from Netdata', 'reads the go.d ping jobs: job name = location',
             '<div class="col gap12"><div class="row"><input id="ndU" placeholder="http://netdata-host:19999" style="width:280px" value="' + esc(HW.ls('ndUrl') || '') + '"></div>' +
@@ -666,7 +668,7 @@
         var tf = { q: '', locs: [], roles: [] }, picked = {};
         D.roles = D.roles || [];
         $('sbody').innerHTML = '<div class="card"><div class="hd"><h2>Roles</h2><span class="sub">groups of targets, e.g. FX, ISP, EXTERNAL; in a location each role is its own group</span><span class="grow"></span><button class="btn-s" id="rAdd">' + I('plus') + 'Add role</button></div>' +
-          '<div class="bd"><div id="rList"></div><div class="xs muted mt8">Mark the role of the ISP\u2019s gateway as <b>ISP edge</b>: when it is clean but the other targets of the location lose packets, the problem is past the ISP – the hub says so.</div></div></div>' +
+          '<div class="bd"><div id="rList"></div><div class="xs muted mt8">A role that is off pauses all its targets. A role named <b>ISP</b> (or GW, gateway, upstream) is the ISP edge: when it is clean but the other targets of the location lose packets, the problem is past the ISP \u2013 the hub says so.</div></div></div>' +
           '<div class="card"><div class="hd"><h2>Targets</h2><span class="sub" id="tCount"></span><span class="grow"></span>' +
           '<button class="btn-s" id="tAdd">' + I('plus') + 'Add</button><button class="btn-s" id="tPaste">Paste a list…</button></div><div class="bd col gap12">' +
           '<div class="row"><div class="search" style="width:240px">' + I('search') + '<input id="tQ" placeholder="Filter"></div><div id="tL"></div><div id="tR"></div><span class="grow"></span><span id="tBulk" class="row"></span></div>' +
@@ -674,19 +676,19 @@
           '<div class="xs muted">Name and location are optional. IPs with the same location are one tile on the Overview, split by role (AMS · ISP, AMS · FX); IPs without a location are grouped by role. Press Save (top right) to apply.</div></div></div>';
         var roleOpts = function (cur) { return '<option value="">–</option>' + D.roles.map(function (r) { return '<option' + (r.name === cur ? ' selected' : '') + '>' + esc(r.name) + '</option>'; }).join(''); };
         function drawRoles() {
-          $('rList').innerHTML = D.roles.length ? '<div class="tw"><table class="table"><thead><tr><th>Name</th><th>ISP edge</th><th class="r">Targets</th><th class="w0"></th></tr></thead><tbody>' + D.roles.map(function (r, i) {
+          $('rList').innerHTML = D.roles.length ? '<div class="tw"><table class="table"><thead><tr><th class="w0">On</th><th>Name</th><th class="r">Targets</th><th class="w0"></th></tr></thead><tbody>' + D.roles.map(function (r, i) {
             var n = D.targets.filter(function (t) { return t.role === r.name; }).length;
-            return '<tr><td><input data-rn="' + i + '" value="' + esc(r.name) + '" style="width:200px"></td><td><label class="switch"><input type="checkbox" data-ru="' + i + '"' + (r.upstream ? ' checked' : '') + '></label></td><td class="r">' + n + '</td>' +
+            return '<tr><td class="w0"><label class="switch"><input type="checkbox" data-ru="' + i + '"' + (r.enabled !== false ? ' checked' : '') + '></label></td><td><span class="row wrapn gap4"><input data-rn="' + i + '" value="' + esc(r.name) + '" style="width:200px;max-width:44vw">' + (isEdge(r.name) ? '<span class="tag" style="white-space:nowrap">ISP edge</span>' : '') + '</span></td><td class="r">' + n + '</td>' +
               '<td class="w0"><button class="btn-xs btn-g btn-i" data-rd="' + i + '" title="Remove">' + I('trash') + '</button></td></tr>'; }).join('') + '</tbody></table></div>' : '<div class="small muted">No roles: targets are grouped by location only.</div>';
           [].forEach.call($('rList').querySelectorAll('[data-rn]'), function (e) { e.onchange = function () { var r = D.roles[+e.dataset.rn], old = r.name, nw = e.value.trim();
             if (!nw) { e.value = old; return; } D.targets.forEach(function (t) { if (t.role === old) t.role = nw; }); r.name = nw; dirty(); drawRoles(); draw(); }; });
-          [].forEach.call($('rList').querySelectorAll('[data-ru]'), function (e) { e.onchange = function () { D.roles[+e.dataset.ru].upstream = e.checked; dirty(); }; });
+          [].forEach.call($('rList').querySelectorAll('[data-ru]'), function (e) { e.onchange = function () { D.roles[+e.dataset.ru].enabled = e.checked; dirty(); }; });
           [].forEach.call($('rList').querySelectorAll('[data-rd]'), function (e) { e.onclick = function () { var r = D.roles[+e.dataset.rd], n = D.targets.filter(function (t) { return t.role === r.name; }).length;
             if (n && !confirm('Remove role "' + r.name + '"? ' + n + ' targets lose it.')) return;
             D.targets.forEach(function (t) { if (t.role === r.name) t.role = ''; }); D.roles.splice(+e.dataset.rd, 1); dirty(); drawRoles(); draw(); }; });
           if (rm) rm.options(D.roles.map(function (r) { return { value: r.name, label: r.name }; }).concat([{ value: '', label: '(no role)' }]));
         }
-        $('rAdd').onclick = function () { var n = 'Role ' + (D.roles.length + 1); D.roles.push({ name: n, upstream: false }); dirty(); drawRoles(); var ins = $('rList').querySelectorAll('[data-rn]'); ins[ins.length - 1].select(); };
+        $('rAdd').onclick = function () { var n = 'Role ' + (D.roles.length + 1); D.roles.push({ name: n, enabled: true }); dirty(); drawRoles(); var ins = $('rList').querySelectorAll('[data-rn]'); ins[ins.length - 1].select(); };
         var lm = HW.ms($('tL'), { options: [], label: 'Location', onChange: function (v) { tf.locs = v; draw(); } });
         var rm = HW.ms($('tR'), { options: [], label: 'Role', onChange: function (v) { tf.roles = v; draw(); } });
         $('tQ').oninput = function () { tf.q = this.value.toLowerCase(); draw(); };
@@ -733,7 +735,7 @@
               if (hi < 0) hi = Math.min(1, p.length - 1);
               var host = p[hi], before = p.slice(0, hi), name = before.length >= 2 ? before[0] : '', loc = before.length ? before[before.length - 1] : '', role = p[hi + 1] || '';
               if (!host) return;
-              if (role && !D.roles.some(function (r) { return r.name.toLowerCase() === role.toLowerCase(); })) D.roles.push({ name: role, upstream: /^(isp|gw|gateway|upstream)/i.test(role) });
+              if (role && !D.roles.some(function (r) { return r.name.toLowerCase() === role.toLowerCase(); })) D.roles.push({ name: role, enabled: true });
               if (role) role = D.roles.filter(function (r) { return r.name.toLowerCase() === role.toLowerCase(); })[0].name;
               if (have[host]) { if (upd_on && p.length > 1) { if (before.length >= 2) have[host].name = name; if (before.length) have[host].location = loc; if (p.length > hi + 1) have[host].role = role; upd++; } }
               else { var t = { name: name, location: loc, host: host, enabled: true, role: role }; D.targets.push(t); have[host] = t; add++; } });

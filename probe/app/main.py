@@ -23,7 +23,7 @@ for _d in (os.path.join(HERE, "..", "shared"), os.path.join(HERE, "..", "..", "s
         sys.path.insert(1, _d)
 
 from auth import Auth            # noqa: E402
-from config import VERSION, Config   # noqa: E402
+from config import VERSION, Config, active   # noqa: E402
 from mtr import MtrRunner        # noqa: E402
 from pinger import Pinger        # noqa: E402
 from store import Store          # noqa: E402
@@ -56,7 +56,7 @@ def main():
     last = {"ping": None}
 
     def on_config(c):
-        key = (tuple((t["host"], t["enabled"]) for t in c["targets"]), tuple(sorted(c["ping"].items())),
+        key = (tuple((t["host"], active(t, c)) for t in c["targets"]), tuple(sorted(c["ping"].items())),
                c["alerts"]["window_s"], c["auto_mtr"]["window_s"])
         if key != last["ping"]:
             last["ping"] = key

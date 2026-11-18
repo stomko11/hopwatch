@@ -7,7 +7,7 @@ import threading
 import time
 import urllib.request
 
-from config import group as _group
+from config import active as _active, group as _group
 from datetime import datetime, timezone
 
 log = logging.getLogger("mtr")
@@ -330,7 +330,7 @@ class MtrRunner:
             tc = c["tcp_check"]
             if tc["enabled"] and time.time() - self.tcp_last >= tc["every_h"] * 3600:
                 self.tcp_last = time.time()
-                hosts = [t["host"] for t in c["targets"] if t["enabled"]]
+                hosts = [t["host"] for t in c["targets"] if _active(t, c)]
                 res = {}
                 for i in range(0, len(hosts), 10):     # 10 at a time, gentle on small routers
                     batch = [threading.Thread(target=lambda h=h: res.__setitem__(h, self._probe_tcp(h, tc["port"])), daemon=True)

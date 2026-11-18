@@ -12,7 +12,7 @@ import subprocess
 import threading
 import time
 
-from config import group as _group, place as _place
+from config import active as _active, group as _group, place as _place
 from store import LOST, ms_to_u16
 
 log = logging.getLogger("pinger")
@@ -94,7 +94,7 @@ class Pinger:
         self.flush(final=True)
 
     def _targets(self, c):
-        return [t["host"] for t in c["targets"] if t["enabled"]]
+        return [t["host"] for t in c["targets"] if _active(t, c)]
 
     def _run(self) -> None:
         backoff = 1
@@ -277,6 +277,7 @@ class Pinger:
             hosts = dict(self.hosts)
         for t in c["targets"]:
             st = hosts.get(t["host"])
+            t = {**t, "enabled": _active(t, c)}     # off when its role is off
             s = stats(self.window(st, w)) if st else {"sent": 0, "loss": None, "avg": None, "jitter": None}
             out.append({**t, **s, "dc": t["location"], "location": _place(t), "group": _group(t), "status": (st.status if st else ("disabled" if not t["enabled"] else "unknown")),
                         "since": st.since if st else None, "last_rtt": st.last_rtt if st else None,
