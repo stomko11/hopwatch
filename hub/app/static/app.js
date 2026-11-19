@@ -26,7 +26,7 @@
   function head(t, sub, act) { $('title').textContent = t; $('subtitle').innerHTML = sub || ''; $('topActions').innerHTML = act || ''; }
   function qs(k) { var m = new RegExp('[?&]' + k + '=([^&]+)').exec(location.hash); return m ? decodeURIComponent(m[1]) : null; }
   function nav() {
-    $('nav').innerHTML = NAV.map(function (n) { return '<a href="#/' + n[0] + '" class="' + (S.view === n[0] ? 'on' : '') + '">' + I(n[1]) + '<span class="lbl">' + n[2] + '</span></a>'; }).join('');
+    $('nav').innerHTML = NAV.map(function (n) { return '<a href="#/' + n[0] + '" class="' + (S.view === n[0] || (n[0] === 'mtr' && (S.view === 'run' || S.view === 'occasion')) ? 'on' : '') + '">' + I(n[1]) + '<span class="lbl">' + n[2] + '</span></a>'; }).join('');
     $('loginBtn').innerHTML = admin() ? I('out') + 'Log out' : S.info && !S.info.auth.password_set ? I('lock') + 'Set password' : I('lock') + 'Log in';
     if (S.thSeg) S.thSeg.set(HW.ls('theme') || 'auto');
     $('prefsBtn').innerHTML = I('more');
@@ -46,7 +46,7 @@
     if (S.info && !S.info.auth.can_view) return loginBox(true);
     if (S.info && !S.info.auth.password_set) return setup();
     if (S.info && !S.info.probes && S.view !== 'settings') return noProbes();
-    ({ overview: vOverview, incidents: vIncidents, compare: vCompare, mtr: vMtr, run: vRun, evidence: vEvidence, settings: vSettings }[S.view] || vOverview)();
+    ({ overview: vOverview, incidents: vIncidents, compare: vCompare, mtr: vMtr, run: vRun, occasion: vOccasion, evidence: vEvidence, settings: vSettings }[S.view] || vOverview)();
   }
   HW.seg($('tzSeg'), HW.TZ, HW.tz, function (v) { HW.tz = v; HW.ls('tz', v); route(); });
   $('prefsBtn').onclick = function () {
@@ -293,10 +293,15 @@
           { key: 'verdict', label: 'Verdict', text: function (x) { return verdict(locs[x])[1]; }, sort: function (x) { return vr[verdict(locs[x])[0]]; }, html: function (x) { var v = verdict(locs[x]); return '<span class="pill ' + v[0] + '">' + esc(v[1]) + '</span>'; } },
           { key: 'more', label: 'More', text: function () { return ''; }, html: function (x) { return '<button class="btn-xs btn-g btn-i" data-loc="' + esc(x) + '">' + I('more') + '</button>'; } }]);
       var mxKey = 'hub-ov-' + ps.map(function (p) { return p.id; }).join('-');
-      if (!S.mx || S.mx.key !== mxKey) S.mx = { key: mxKey, t: HW.table($('mx'), { id: mxKey, rows: rows, columns: cols, empty: 'No locations match.' }) };
-      else { S.mx.t = HW.table($('mx'), { id: mxKey, rows: rows, columns: cols, empty: 'No locations match.' }); }
+      // a location opens its MTR occasions of this window (live: the last 24 hours)
+      var locGo = function (x) { var w = live ? { from: Date.now() / 1000 - 86400, to: Date.now() / 1000 } : rp.get();
+        location.hash = '#/mtr?view=occ&loc=' + encodeURIComponent(x) + '&from=' + Math.floor(w.from) + '&to=' + Math.ceil(w.to); };
+      var mxo = { id: mxKey, rows: rows, columns: cols, empty: 'No locations match.', onRow: locGo };
+      if (!S.mx || S.mx.key !== mxKey) S.mx = { key: mxKey, t: HW.table($('mx'), mxo) };
+      else { S.mx.t = HW.table($('mx'), mxo); }
       [].forEach.call($('mx').querySelectorAll('[data-loc]'), function (b) { b.onclick = function () { var x = b.dataset.loc, hs = Object.keys(locs[x].hosts);
         HW.menu(b, [{ label: 'Compare sites on a chart', icon: 'chart', onClick: function () { location.hash = '#/compare?loc=' + encodeURIComponent(x); } },
+          { label: 'MTR runs of this location', icon: 'route', onClick: function () { locGo(x); } },
           { label: 'MTR from all sites', icon: 'play', onClick: function () { mtrDialog(hs); } },
           { label: 'Incidents for this location', icon: 'alert', onClick: function () { location.hash = '#/incidents?loc=' + encodeURIComponent(x); } }]); }; });
     }
@@ -418,13 +423,57 @@
   function statusPill(r) { var m = { done: 'ok', running: 'info', queued: '', error: 'bad', cancelled: '' }[r.status]; return '<span class="pill ' + m + '">' + esc(r.status) + '</span>'; }
   function lossCell(v) { if (v == null) return '<span class="faint">–</span>'; var c = v >= 20 ? 'var(--bad)' : v > 0 ? 'var(--warn)' : 'var(--ok)';
     return '<div class="hopbar"><span class="num" style="width:44px;text-align:right;color:' + c + '">' + HW.fnum(v) + '%</span><div class="bar"><i style="width:' + Math.min(100, Math.max(v, v > 0 ? 3 : 0)) + '%;background:' + c + '"></i></div></div>'; }
+  /* MTR runs of one location that belong together: the runs that start within 10 minutes of the
+     first one (its own automatic runs and the cross-site runs they caused); a lasting problem
+     gives one occasion per 10 minutes, not one endless one */
+  var OCC_WIN = 600;
+  function occasions(runs) {
+    var by = {}, out = [];
+    runs.slice().sort(function (a, b) { return (a.started || a.created) - (b.started || b.created); }).forEach(function (r) {
+      var t = r.started || r.created, k = r.location || r.host, o = by[k];
+      if (!o || t - o.t0 > OCC_WIN) { o = by[k] = { location: k, t0: t, t1: t, runs: [] }; out.push(o); }
+      o.t1 = Math.max(o.t1, (r.finished || t)); o.runs.push(r);
+    });
+    out.forEach(function (o) {
+      var s = {}, h = {}, tr = {}; o.runs.forEach(function (r) { s[r.probe_name] = 1; h[r.host] = 1; var n = (TRIG[r.trig] || [r.trig])[0]; tr[n] = (tr[n] || 0) + 1; });
+      o.sites = Object.keys(s).sort(); o.hosts = Object.keys(h).sort(); o.trigs = tr;
+      o.worst = o.runs.reduce(function (a, r) { return r.dst_loss != null && r.dst_loss > a ? r.dst_loss : a; }, null);
+    });
+    return out.reverse();
+  }
+  function occLink(o) { return '#/occasion?loc=' + encodeURIComponent(o.location) + '&from=' + Math.floor(o.t0 - 60) + '&to=' + Math.ceil(o.t1 + 60); }
+
+  /* one occasion: target IPs down, sites across, every run in its cell */
+  function vOccasion() {
+    var loc = qs('loc'), t0 = +qs('from'), t1 = +qs('to');
+    head(loc + ' · MTR from every site', HW.fdt(t0, 1) + ' – ' + HW.fdt(t1, 1), '<a class="btn-s btn-g" href="#/mtr?view=occ&loc=' + encodeURIComponent(loc) + '">' + I('route') + 'All occasions</a>');
+    $('main').innerHTML = '<div class="card"><div class="empty">Loading…</div></div>';
+    Promise.all([live(), api('/api/mtr?limit=2000&from=' + Math.floor(t0) + '&to=' + Math.ceil(t1))]).then(function (x) {
+      var l = x[0], runs = x[1].runs.filter(function (r) { return (r.location || r.host) === loc; });
+      var sites = l.probes.map(function (p) { return p.name; }), hosts = {}; runs.forEach(function (r) { hosts[r.host] = 1; });
+      var cell = function (h, s) { var rs = runs.filter(function (r) { return r.host === h && r.probe_name === s; });
+        if (!rs.length) return '<td class="faint small">no run</td>';
+        return '<td>' + rs.map(function (r) { return '<a class="occr" href="#/run?probe=' + encodeURIComponent(r.probe) + '&id=' + r.id + '">' + trigPill(r) + '<span class="num ' + (r.dst_loss >= 20 ? 'bad' : r.dst_loss > 0 ? 'warn' : 'ok') + '">' + (r.dst_loss == null ? r.status : HW.fnum(r.dst_loss) + '%') + '</span><span class="xs muted">' + HW.ftime(r.started || r.created) + '</span></a>'; }).join('') + '</td>'; };
+      var hs = Object.keys(hosts).sort(), mine = sites.filter(function (s) { return runs.some(function (r) { return r.probe_name === s; }); });
+      $('main').innerHTML = '<div class="kpis">' + kpi('route', 'Runs', runs.length, hs.length + ' IPs') + kpi('server', 'Sites that traced', mine.length + '<span class="small muted"> / ' + sites.length + '</span>', esc(sites.filter(function (s) { return mine.indexOf(s) < 0; }).join(', ') ? 'no run from ' + sites.filter(function (s) { return mine.indexOf(s) < 0; }).join(', ') : 'all sites')) +
+        kpi('alert', 'Worst loss at target', HW.fnum(runs.reduce(function (a, r) { return Math.max(a, r.dst_loss || 0); }, 0)) + '%', '') + kpi('box', 'Evidence', '<span class="small">ZIP of this time</span>', '', '#/evidence?from=' + Math.floor(t0 - 300) + '&to=' + Math.ceil(t1 + 300)) + '</div>' +
+        '<div class="card"><div class="hd"><h2>Who traced what</h2><span class="sub">a cell per target and site · click a run to open it, then put another one next to it</span></div><div class="bd"><div class="tw"><table class="table"><thead><tr><th>Target</th>' + sites.map(function (s) { return '<th>' + esc(s) + '</th>'; }).join('') + '</tr></thead><tbody>' +
+        hs.map(function (h) { return '<tr><td class="mono small">' + esc(h) + '</td>' + sites.map(function (s) { return cell(h, s); }).join('') + '</tr>'; }).join('') + '</tbody></table></div>' +
+        '<div class="xs muted mt8">Automatic = the site saw the problem itself · Cross-site = the hub asked because another site saw it.</div></div></div>';
+    }).catch(fail);
+  }
   function vMtr() {
     head('MTR', 'Runs from every site, newest first', '<button class="btn-p" id="runBtn">' + I('play') + 'MTR from all sites</button>');
     $('runBtn').onclick = function () { mtrDialog([]); };
     var f = HW.lsj('hmtr', { range: 604800 });
+    f.view = qs('view') || f.view || 'runs';
     (function () {
-      $('main').innerHTML = '<div class="card"><div class="bd row gap12"><span id="rR"></span></div></div>' +
-        '<div class="card"><div class="hd"><h2 id="rN">Runs</h2><span class="sub" id="rB"></span></div><div class="bd"><div id="rL"></div></div></div>';
+      $('main').innerHTML = '<div class="card"><div class="bd row gap12"><span id="rR"></span><span id="rV"></span></div></div>' +
+        '<div class="card"><div class="hd"><h2 id="rN">Runs</h2><span class="sub" id="rB"></span></div><div class="bd"><div id="rL"></div><div id="rO"></div></div></div>';
+      HW.seg($('rV'), [['runs', 'Runs'], ['occ', 'Occasions']], f.view, function (v) { f.view = v; HW.ls('hmtr', f); last && show(last); });
+      var last = null, otbl = null;
+      $('rO')._tf = {};
+      if (qs('loc')) { $('rO')._tf.location = { in: [qs('loc')] }; }
       var rp = HW.rangePicker($('rR'), [[86400, '24h'], [604800, '7d'], [2592000, '30d']], qs('from') ? { from: +qs('from'), to: +qs('to') } : { range: f.range }, function (w) { if (w.range) f.range = w.range; HW.ls('hmtr', f); load(); });
       // filtering is in the table: a search box and a filter under every column (links preset the target)
       var tbl = null;
@@ -433,7 +482,26 @@
       if (qs('status')) $('rL')._tf.status = { in: qs('status').split(',') };
       function load() {
         var w = rp.get();
-        api('/api/mtr?limit=2000&from=' + Math.floor(w.from) + '&to=' + Math.ceil(w.to)).then(function (r) {
+        api('/api/mtr?limit=2000&from=' + Math.floor(w.from) + '&to=' + Math.ceil(w.to)).then(function (r) { last = r; show(r); }).catch(fail);
+      }
+      function show(r) {
+          $('rL').style.display = f.view === 'runs' ? '' : 'none'; $('rO').style.display = f.view === 'occ' ? '' : 'none';
+          if (f.view === 'occ') {
+            var oc = occasions(r.runs);
+            $('rN').textContent = oc.length + ' occasions · ' + r.runs.length + ' runs';
+            var oc_cols = [
+              { key: 't0', label: 'Started', type: 'time', nowrap: true, text: function (o) { return HW.fdt(o.t0); }, sort: function (o) { return o.t0; } },
+              { key: 'location', label: 'Location', html: function (o) { return '<b>' + esc(o.location) + '</b>'; } },
+              { key: 'sites', label: 'Sites', text: function (o) { return o.sites.join(', '); } },
+              { key: 'n', label: 'Runs', type: 'num', align: 'r', val: function (o) { return o.runs.length; }, text: function (o) { return o.runs.length; } },
+              { key: 'hosts', label: 'IPs', type: 'num', align: 'r', val: function (o) { return o.hosts.length; }, text: function (o) { return o.hosts.length; } },
+              { key: 'trigs', label: 'Triggers', text: function (o) { return Object.keys(o.trigs).map(function (k) { return k + ' ×' + o.trigs[k]; }).join(', '); } },
+              { key: 'dur', label: 'Lasted', type: 'num', align: 'r', val: function (o) { return Math.round((o.t1 - o.t0) / 60); }, text: function (o) { return HW.fdur(o.t1 - o.t0); } },
+              { key: 'worst', label: 'Worst loss', type: 'num', minw: 140, val: function (o) { return o.worst; }, text: function (o) { return o.worst == null ? '' : o.worst + '%'; }, sort: function (o) { return o.worst == null ? -1 : o.worst; }, html: function (o) { return lossCell(o.worst); } }];
+            if (otbl) otbl.render(oc); else otbl = HW.table($('rO'), { id: 'hub-mtr-occ', rows: oc, columns: oc_cols, filterRow: true, empty: 'No runs in this window.',
+              onRow: function (o) { location.hash = occLink(o); } });
+            return;
+          }
           $('rN').textContent = r.runs.length + ' runs';
           $('rB').textContent = Object.keys(r.errors).length ? 'not answering: ' + Object.keys(r.errors).join(', ') : '';
           var cols = [
@@ -449,7 +517,6 @@
           if (tbl) tbl.render(r.runs); else tbl = HW.table($('rL'), { id: 'hub-mtr', rows: r.runs, columns: cols, filterRow: true, empty: 'No runs in this window.',
             searchText: function (x) { return x.id + ' ' + (x.error || ''); },
             onRow: function (x) { location.hash = '#/run?probe=' + x.probe + '&id=' + x.id; } });
-        }).catch(fail);
       }
       load(); S.timers.push(setInterval(load, 10000));
     })();

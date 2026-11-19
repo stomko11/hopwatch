@@ -273,3 +273,4 @@ details.help>summary::-webkit-details-marker{display:none} details.help>div{padd
 .chip>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap} .chip svg{width:12px;height:12px;color:var(--accent)} .chip button{height:20px;width:20px;padding:0;border-radius:10px;border:0;font-size:14px;line-height:1}
 .tfm .tfl{max-height:230px;overflow:auto;display:grid;gap:2px;padding:2px 0} .tfm .tfl label{padding:3px 4px;border-radius:6px;cursor:pointer;font-size:13px} .tfm .tfl label:hover{background:var(--surface2)}
 .tfm select,.tfm input[type=number],.tfm input[type=time],.tfm input[type=datetime-local]{height:30px}
+.occr{display:flex;align-items:center;gap:6px;padding:3px 6px;border-radius:7px;text-decoration:none;color:inherit;white-space:nowrap} .occr:hover{background:var(--surface2)} .occr+.occr{margin-top:2px}
