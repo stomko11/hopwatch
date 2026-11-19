@@ -260,7 +260,7 @@
       $('kpis').innerHTML = kpi('server', 'Probes online', '<span class="' + (online.length < ps.length ? 'warn' : 'ok') + '">' + online.length + '</span><span class="small muted"> / ' + ps.length + '</span>', ps.filter(function (p) { return p.error && !p.targets; }).map(function (p) { return esc(p.name) + ' offline'; }).join(', ') || 'all answering', '#/settings?tab=probes') +
         kpi('alert', 'Seen from several sites', '<span class="' + (multi ? 'bad' : 'ok') + '">' + multi + '</span>', 'locations ' + rl + ', likely the target side', '@several') +
         kpi('info', 'Seen from one site only', '<span class="' + (single ? 'warn' : 'ok') + '">' + single + '</span>', 'locations ' + rl + ', likely that site\u2019s path', '#/incidents?kind=path,site') +
-        kpi('route', 'MTR running', running, 'on all probes', '#/mtr?status=' + encodeURIComponent('=running,=queued'));
+        kpi('route', 'MTR running', running, 'on all probes', '#/mtr?status=running,queued');
       onKpi({ several: function () { f.view = 'common'; f.only = 'bad'; HW.ls('hovf', f); onlySeg.set('bad'); viewSeg(); charts(); draw(); $('mx').scrollIntoView({ behavior: 'smooth', block: 'start' }); } });
       $('pstrip').innerHTML = ps.map(function (p) { var bad = (p.targets || []).filter(function (t) { return RANK[t.status] >= 2; }).length;
         return '<span class="pill ' + (p.error && !p.targets ? 'bad' : bad ? 'warn' : 'ok') + '" title="' + esc(p.error || p.url) + '">' + I('server') + esc(p.name) + (p.targets ? ' · ' + p.targets.length + ' targets' + (bad ? ' · ' + bad + ' with problems now' : '') : ' · ' + esc(p.error || 'offline')) + '</span>'; }).join('');
@@ -428,8 +428,9 @@
       var rp = HW.rangePicker($('rR'), [[86400, '24h'], [604800, '7d'], [2592000, '30d']], qs('from') ? { from: +qs('from'), to: +qs('to') } : { range: f.range }, function (w) { if (w.range) f.range = w.range; HW.ls('hmtr', f); load(); });
       // filtering is in the table: a search box and a filter under every column (links preset the target)
       var tbl = null;
-      if (qs('host')) $('rL')._tf = { host: '=' + qs('host') };
-      if (qs('status')) $('rL')._tf = Object.assign($('rL')._tf || {}, { status: qs('status') });
+      $('rL')._tf = {};
+      if (qs('host')) $('rL')._tf.host = { in: [qs('host')] };
+      if (qs('status')) $('rL')._tf.status = { in: qs('status').split(',') };
       function load() {
         var w = rp.get();
         api('/api/mtr?limit=2000&from=' + Math.floor(w.from) + '&to=' + Math.ceil(w.to)).then(function (r) {
@@ -441,7 +442,7 @@
             { key: 'location', label: 'Location' },
             { key: 'host', label: 'Target', html: function (x) { return '<span class="mono small">' + esc(x.host) + '</span>'; } },
             { key: 'mode', label: 'Mode', text: modeName },
-            { key: 'trig', label: 'Trigger', text: function (x) { return (TRIG[x.trig] || [x.trig])[0] + (x.reason ? ' ' + x.reason : ''); }, html: function (x) { return trigPill(x) + (x.reason ? ' <span class="xs muted">' + esc(x.reason) + '</span>' : ''); } },
+            { key: 'trig', label: 'Trigger', facet: function (x) { return (TRIG[x.trig] || [x.trig])[0]; }, text: function (x) { return (TRIG[x.trig] || [x.trig])[0] + (x.reason ? ' ' + x.reason : ''); }, html: function (x) { return trigPill(x) + (x.reason ? ' <span class="xs muted">' + esc(x.reason) + '</span>' : ''); } },
             { key: 'status', label: 'Status', html: function (x) { return x.status === 'running' || x.status === 'queued' ? HW.mtrProgress(x, 1) : statusPill(x); } },
             { key: 'dst_loss', label: 'Loss at target', type: 'num', val: function (x) { return x.dst_loss; }, minw: 140, text: function (x) { return x.dst_loss == null ? '' : x.dst_loss + '%'; }, sort: function (x) { return x.dst_loss == null ? -1 : x.dst_loss; }, html: function (x) { return lossCell(x.dst_loss); } },
             { key: 'hops', label: 'Hops', type: 'num', align: 'r', val: function (x) { return x.hops; }, sort: function (x) { return x.hops || 0; } }];

@@ -487,70 +487,107 @@
     setTimeout(function () { HW.chart($('hwBig'), series, big); }, 30);
   };
 
-  /* ------------------------------------------------------------ column filter expressions
-     HW.colFilter(expr, type) -> fn(text, value) or null when empty. A comma means "or".
-       numbers ('num'):  5   =5   !=0   >5   >=5   <20   <=20   5..20   5-20
-       times ('time'):   >14:00   <=15:30   14:00..15:30 (time of day)   >2026-11-18   18.11.2026
-                         2026-11-18 14:00..2026-11-18 16:00   >-2h   >-30m   >-1d (relative to now)
-       text (default):   abc (contains)   =abc (exactly)   !abc (does not contain)   !=abc   ^abc (starts)   abc$ (ends)
-     Times use the UTC / local switch. Anything that doesn't parse as a number or time is matched as text. */
-  HW.colFilter = function (expr, type) {
-    var parts = String(expr || '').split(',').map(function (s) { return s.trim(); }).filter(Boolean);
-    if (!parts.length) return null;
-    var cmp = function (op, a, b) { return op === '>' ? a > b : op === '>=' ? a >= b : op === '<' ? a < b : op === '<=' ? a <= b : op === '!=' ? a !== b : a === b; };
-    var utc = function () { return HW.tz === 'utc'; };
-    var tod = function (sec) { var t = HW.parts(sec * 1000); return t.h * 60 + t.m + t.s / 60; };
-    // "HH:MM" -> minutes of the day; a date (with or without time) -> [start, end] in epoch seconds; "-2h" -> epoch
-    var ptime = function (s) {
-      var m = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(s);
-      if (m) return { tod: +m[1] * 60 + +m[2] + (+m[3] || 0) / 60 };
-      m = /^-(\d+(?:\.\d+)?)\s*(s|m|min|h|d)$/i.exec(s);
-      if (m) return { abs: Date.now() / 1000 - +m[1] * { s: 1, m: 60, min: 60, h: 3600, d: 86400 }[m[2].toLowerCase()] };
-      m = /^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T](\d{1,2}):(\d{2}))?$/.exec(s) || /^(\d{1,2})\.(\d{1,2})\.(\d{4})(?:\s+(\d{1,2}):(\d{2}))?$/.exec(s);
-      if (!m) return null;
-      var y = m[1].length === 4 ? +m[1] : +m[3], mo = +m[2] - 1, d = m[1].length === 4 ? +m[3] : +m[1], hasT = m[4] != null;
-      var mk = function (h, mi) { return (utc() ? Date.UTC(y, mo, d, h, mi) : new Date(y, mo, d, h, mi).getTime()) / 1000; };
-      return hasT ? { abs: mk(+m[4], +m[5]), end: mk(+m[4], +m[5]) + 60 } : { abs: mk(0, 0), end: mk(0, 0) + 86400 };
-    };
-    var one = function (p) {
-      var lo = p.toLowerCase();
-      if (type === 'num' || type === 'time') {
-        var r = /^(.+?)\s*\.\.\s*(.+)$/.exec(p) || (type === 'num' ? /^(-?\d+(?:\.\d+)?)\s*-\s*(-?\d+(?:\.\d+)?)$/.exec(p) : null);
-        var om = /^(>=|<=|!=|>|<|=)?\s*(.+)$/.exec(p), op = r ? null : om[1] || '=', v = r ? null : om[2];
-        if (type === 'num') {
-          if (r && !isNaN(parseFloat(r[1])) && !isNaN(parseFloat(r[2]))) { var a = parseFloat(r[1]), b = parseFloat(r[2]); return function (t, n) { return n != null && n >= Math.min(a, b) && n <= Math.max(a, b); }; }
-          var x = parseFloat(v); if (!r && !isNaN(x) && /^-?\d+(\.\d+)?\s*%?$/.test(v)) return function (t, n) { return n != null && cmp(op, Math.round(n * 1000) / 1000, x); };
-        } else {
-          if (r) { var A = ptime(r[1].trim()), B = ptime(r[2].trim());
-            if (A && B && A.tod != null && B.tod != null) return function (t, n) { if (n == null) return false; var q = tod(n); return A.tod <= B.tod ? q >= A.tod && q <= B.tod : q >= A.tod || q <= B.tod; };
-            if (A && B && A.abs != null && B.abs != null) return function (t, n) { return n != null && n >= A.abs && n < (B.end || B.abs); }; }
-          var P = v && ptime(v.trim());
-          if (P && P.tod != null) return function (t, n) { return n != null && cmp(op, Math.floor(tod(n)), P.tod); };
-          if (P && P.abs != null) return function (t, n) { if (n == null) return false;
-            if (!P.end) return cmp(op, n, P.abs);                        // relative: -2h
-            var inn = n >= P.abs && n < P.end;                            // a day or a minute
-            return op === '=' ? inn : op === '!=' ? !inn : op === '>' ? n >= P.end : op === '>=' ? n >= P.abs : op === '<' ? n < P.abs : n < P.end; };
-        }
-      }
-      if (lo.indexOf('!=') === 0) { var ne = lo.slice(2).trim(); return function (t) { return t.toLowerCase() !== ne; }; }
-      if (lo[0] === '!') { var nc = lo.slice(1).trim(); return function (t) { return t.toLowerCase().indexOf(nc) < 0; }; }
-      if (lo[0] === '=') { var eq = lo.slice(1).trim(); return function (t) { return t.toLowerCase() === eq; }; }
-      if (lo[0] === '^') { var sw = lo.slice(1); return function (t) { return t.toLowerCase().indexOf(sw) === 0; }; }
-      if (lo.length > 1 && lo[lo.length - 1] === '$') { var ew = lo.slice(0, -1); return function (t) { var s = t.toLowerCase(); return s.slice(s.length - ew.length) === ew; }; }
-      return function (t) { return t.toLowerCase().indexOf(lo) >= 0; };
-    };
-    var fs = parts.map(one);
-    return function (t, n) { return fs.some(function (f) { return f(t, n); }); };
+  /* ------------------------------------------------------------ column filters (filterRow tables)
+     el._tf[key] is one of: {in:[values], q:'text'} (text), {op:'>', a, b} (number),
+     {last:s} | {after:t, before:t} | {tod:[min, min]} (time, epoch seconds / minutes of the day) */
+  HW.tfMatch = function (f, type, text, n, facet) {
+    if (!f) return true;
+    if (type === 'num') {
+      if (f.op == null || f.a == null || f.a === '') return true;
+      if (n == null) return false;
+      var a = +f.a, b = +f.b;
+      return f.op === '=' ? n === a : f.op === '!=' ? n !== a : f.op === '>' ? n > a : f.op === '>=' ? n >= a : f.op === '<' ? n < a : f.op === '<=' ? n <= a :
+        f.op === 'between' ? n >= Math.min(a, b) && n <= Math.max(a, b) : true;
+    }
+    if (type === 'time') {
+      if (n == null) return !(f.last || f.after || f.before || f.tod);
+      if (f.last && n < Date.now() / 1000 - f.last) return false;
+      if (f.after && n < f.after) return false;
+      if (f.before && n >= f.before) return false;
+      if (f.tod) { var t = HW.parts(n * 1000), m = t.h * 60 + t.m, x = f.tod[0], y = f.tod[1]; if (!(x <= y ? m >= x && m <= y : m >= x || m <= y)) return false; }
+      return true;
+    }
+    if (f.in && f.in.length && f.in.indexOf(facet) < 0) return false;
+    if (f.q && String(text).toLowerCase().indexOf(String(f.q).toLowerCase()) < 0) return false;
+    return true;
   };
-  HW.FILTER_HELP = { num: '>5  <=20  5..20  !=0', time: '>14:00  14:00..15:30  >2026-11-18  >-2h', text: 'contains  =exact  !not  ^starts' };
+  HW.tfActive = function (f) { return !!f && !!((f.in && f.in.length) || f.q || (f.op && f.a !== '' && f.a != null) || f.last || f.after || f.before || f.tod); };
+  var hm = function (m) { return P2(Math.floor(m / 60)) + ':' + P2(m % 60); };
+  var LASTS = [[900, '15 min'], [3600, '1 h'], [21600, '6 h'], [86400, '24 h'], [604800, '7 days']];
+  HW.tfLabel = function (c, f) {
+    if (c.type === 'num') return c.label + ' ' + ({ '=': '=', '!=': '≠', '>': '>', '>=': '≥', '<': '<', '<=': '≤' }[f.op] ? ({ '=': '=', '!=': '≠', '>': '>', '>=': '≥', '<': '<', '<=': '≤' }[f.op] + ' ' + f.a) : f.a + '–' + f.b);
+    if (c.type === 'time') {
+      var p = [];
+      if (f.last) p.push('last ' + (LASTS.filter(function (x) { return x[0] === f.last; })[0] || [0, HW.fdur(f.last)])[1]);
+      if (f.after && f.before) p.push(HW.fdt(f.after, 1) + ' – ' + HW.fdt(f.before, 1)); else if (f.after) p.push('after ' + HW.fdt(f.after, 1)); else if (f.before) p.push('before ' + HW.fdt(f.before, 1));
+      if (f.tod) p.push(hm(f.tod[0]) + '–' + hm(f.tod[1]) + ' each day');
+      return c.label + ': ' + p.join(', ');
+    }
+    var s = [];
+    if (f.in && f.in.length) s.push(f.in.slice(0, 2).join(', ') + (f.in.length > 2 ? ' +' + (f.in.length - 2) : ''));
+    if (f.q) s.push('contains “' + f.q + '”');
+    return c.label + ': ' + s.join(' · ');
+  };
+  /* the filter menu of one column; values: [[value, count]] for text columns */
+  HW.tfMenu = function (anchor, c, cur, values, onChange) {
+    HW.closePops();
+    var f = JSON.parse(JSON.stringify(cur || {})), d = document.createElement('div'); d.className = 'drop tfm'; d.style.width = '300px';
+    var set = function () { onChange(HW.tfActive(f) ? f : null); };
+    var foot = '<div class="row"><button class="btn-xs btn-g" data-clr>Clear</button><span class="grow"></span><button class="btn-xs btn-p" data-ok>Done</button></div>';
+    var head = '<div class="small"><b>' + esc(c.label) + '</b></div>';
+    if (c.type === 'num') {
+      var ops = [['>=', 'at least'], ['>', 'more than'], ['<=', 'at most'], ['<', 'less than'], ['=', 'exactly'], ['!=', 'not'], ['between', 'between']];
+      d.innerHTML = head + '<div class="row wrapn gap4"><select data-op>' + ops.map(function (o) { return '<option value="' + o[0] + '"' + ((f.op || '>=') === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select>' +
+        '<input type="number" step="any" data-a value="' + esc(f.a == null ? '' : f.a) + '" style="width:80px"><span data-and class="small muted">and</span><input type="number" step="any" data-b value="' + esc(f.b == null ? '' : f.b) + '" style="width:80px"></div>' + foot;
+      var sync = function () { var op = d.querySelector('[data-op]').value, btw = op === 'between';
+        d.querySelector('[data-b]').style.display = d.querySelector('[data-and]').style.display = btw ? '' : 'none';
+        f = { op: op, a: d.querySelector('[data-a]').value, b: d.querySelector('[data-b]').value }; if (btw && f.b === '') f.a = ''; set(); };
+      d.querySelector('[data-op]').onchange = sync; d.querySelector('[data-a]').oninput = sync; d.querySelector('[data-b]').oninput = sync;
+      setTimeout(function () { d.querySelector('[data-b]').style.display = d.querySelector('[data-and]').style.display = (f.op || '>=') === 'between' ? '' : 'none'; d.querySelector('[data-a]').focus(); });
+    } else if (c.type === 'time') {
+      d.innerHTML = head + '<div class="small muted">In the last</div><div class="row wrapn gap4">' + LASTS.map(function (x) { return '<button class="btn-xs' + (f.last === x[0] ? ' btn-p' : '') + '" data-last="' + x[0] + '">' + x[1] + '</button>'; }).join('') + '</div>' +
+        '<div class="small muted">After / before</div><div class="col gap4"><input type="datetime-local" data-af value="' + (f.after ? HW.toInput(f.after) : '') + '"><input type="datetime-local" data-bf value="' + (f.before ? HW.toInput(f.before) : '') + '"></div>' +
+        '<div class="small muted">Time of day, every day</div><div class="row wrapn gap4"><input type="time" data-t0 value="' + (f.tod ? hm(f.tod[0]) : '') + '"><span class="small muted">to</span><input type="time" data-t1 value="' + (f.tod ? hm(f.tod[1]) : '') + '"></div>' +
+        '<div class="xs muted">Times are ' + (HW.tz === 'utc' ? 'UTC' : 'local') + '.</div>' + foot;
+      [].forEach.call(d.querySelectorAll('[data-last]'), function (b) { b.onclick = function () { var v = +b.dataset.last; f.last = f.last === v ? 0 : v;
+        [].forEach.call(d.querySelectorAll('[data-last]'), function (x) { x.className = 'btn-xs' + (+x.dataset.last === f.last ? ' btn-p' : ''); }); set(); }; });
+      var tm = function (v) { var m = /^(\d{1,2}):(\d{2})/.exec(v || ''); return m ? +m[1] * 60 + +m[2] : null; };
+      d.querySelector('[data-af]').onchange = function () { f.after = HW.fromInput(this.value) || 0; set(); };
+      d.querySelector('[data-bf]').onchange = function () { f.before = HW.fromInput(this.value) || 0; set(); };
+      d.querySelector('[data-t0]').onchange = d.querySelector('[data-t1]').onchange = function () { var a = tm(d.querySelector('[data-t0]').value), b = tm(d.querySelector('[data-t1]').value); f.tod = a != null && b != null ? [a, b] : null; set(); };
+    } else {
+      var inSet = {}; (f.in || []).forEach(function (v) { inSet[v] = 1; });
+      d.innerHTML = head + '<div class="search">' + HW.icon('search') + '<input data-ls placeholder="Find in the list"></div>' +
+        '<div class="row"><button class="btn-xs btn-g" data-all>All</button><button class="btn-xs btn-g" data-none>None</button><span class="grow"></span><span class="xs muted">' + values.length + ' values</span></div>' +
+        '<div class="tfl" data-list></div><div class="small muted">or contains</div><input data-q value="' + esc(f.q || '') + '" placeholder="any text">' + foot;
+      var drawL = function () { var q = d.querySelector('[data-ls]').value.toLowerCase();
+        d.querySelector('[data-list]').innerHTML = values.filter(function (v) { return !q || String(v[0]).toLowerCase().indexOf(q) >= 0; }).slice(0, 300).map(function (v) {
+          return '<label class="row wrapn gap4"><input type="checkbox" data-v="' + esc(v[0]) + '"' + (inSet[v[0]] ? ' checked' : '') + '><span class="grow ell">' + (v[0] === '' ? '<span class="faint">(empty)</span>' : esc(v[0])) + '</span><span class="xs muted">' + v[1] + '</span></label>'; }).join('') || '<div class="small muted">No value matches.</div>';
+        [].forEach.call(d.querySelectorAll('[data-v]'), function (cb) { cb.onchange = function () { if (cb.checked) inSet[cb.dataset.v] = 1; else delete inSet[cb.dataset.v]; f.in = Object.keys(inSet); set(); }; }); };
+      d.querySelector('[data-ls]').oninput = drawL;
+      d.querySelector('[data-all]').onclick = function () { values.forEach(function (v) { inSet[v[0]] = 1; }); f.in = Object.keys(inSet); drawL(); set(); };
+      d.querySelector('[data-none]').onclick = function () { inSet = {}; f.in = []; drawL(); set(); };
+      d.querySelector('[data-q]').oninput = function () { f.q = this.value; set(); };
+      drawL(); setTimeout(function () { d.querySelector('[data-ls]').focus(); });
+    }
+    document.body.appendChild(d); HW.place(d, anchor, 300);
+    var close = function () { d.remove(); document.removeEventListener('mousedown', out, true); };
+    var out = function (e) { if (!d.contains(e.target) && !anchor.contains(e.target)) close(); };
+    setTimeout(function () { document.addEventListener('mousedown', out, true); });
+    d.querySelector('[data-clr]').onclick = function () { f = {}; onChange(null); close(); };
+    d.querySelector('[data-ok]').onclick = close;
+    pops.push({ close: close });
+  };
+
 
   /* ------------------------------------------------------------ data table
      HW.table(el, {id, rows, columns:[{key, label, html(row), text(row), sort(row), align:'r', hide:true}],
                    rowKey(row), onRow(row), select:{map}, rowClass(row)})
      - click a header to sort, Filters adds a text filter per column, Columns shows / hides / reorders
        (remembered per table); on narrow screens every row is a card so nothing hides off to the side
-     - filterRow:true: a search box over everything plus a filter field under every header that
-       understands HW.colFilter expressions; column type:'num' | 'time' (value from val(row) or sort(row)) */
+     - filterRow:true: a search box over everything, and a filter button on every header: a list of
+       values (text, facet(row) picks the value), conditions (type:'num') or time windows (type:'time');
+       numbers and times come from val(row) or sort(row); active filters show as chips */
   HW.table = function (el, o) {
     var key = 'tbl_' + o.id, st = HW.lsj(key, { order: null, hidden: null, sort: null, dir: 1 });
     var cols = o.columns, byKey = {}; cols.forEach(function (c) { byKey[c.key] = c; });
@@ -558,6 +595,10 @@
     if (!st.hidden) st.hidden = cols.filter(function (c) { return c.hide; }).map(function (c) { return c.key; });
     el._tf = el._tf || {}; el._showF = el._showF || false; el._q = el._q || '';
     var FR = !!o.filterRow;
+    var facet = function (c, r) { return c.facet ? String(c.facet(r) == null ? '' : c.facet(r)) : txt(c, r); };
+    var facets = function (c) { var m = {}; o.rows.forEach(function (r) { var v = facet(c, r); m[v] = (m[v] || 0) + 1; });
+      return Object.keys(m).map(function (k) { return [k, m[k]]; }).sort(function (a, b) { return b[1] - a[1] || String(a[0]).localeCompare(String(b[0])); }); };
+    var openF = function (k, anchor) { var c = byKey[k]; HW.tfMenu(anchor, c, el._tf[k], c.type ? [] : facets(c), function (f) { if (f) el._tf[k] = f; else delete el._tf[k]; render(); }); };
     var num = function (c, r) { var v = c.val ? c.val(r) : c.sort ? c.sort(r) : parseFloat(txt(c, r)); return v == null || v === '' || isNaN(v) ? null : +v; };
     var save = function () { HW.ls(key, st); };
     var txt = function (c, r) { return c.text ? String(c.text(r) == null ? '' : c.text(r)) : String(r[c.key] == null ? '' : r[c.key]); };
@@ -565,10 +606,10 @@
     function rows() {
       var list;
       if (FR) {
-        var fl = Object.keys(el._tf).filter(function (k) { return byKey[k]; }).map(function (k) { var c = byKey[k]; return [c, HW.colFilter(el._tf[k], c.type)]; }).filter(function (x) { return x[1]; });
+        var fl = Object.keys(el._tf).filter(function (k) { return byKey[k] && HW.tfActive(el._tf[k]); }).map(function (k) { return [byKey[k], el._tf[k]]; });
         var words = el._q.toLowerCase().split(/\s+/).filter(Boolean);
         list = o.rows.filter(function (r) {
-          if (!fl.every(function (x) { return x[1](txt(x[0], r), x[0].type ? num(x[0], r) : null); })) return false;
+          if (!fl.every(function (x) { var c = x[0]; return HW.tfMatch(x[1], c.type, txt(c, r), c.type ? num(c, r) : null, facet(c, r)); })) return false;
           if (!words.length) return true;
           var all = cols.map(function (c) { return txt(c, r); }).join(' ').toLowerCase() + (o.searchText ? ' ' + String(o.searchText(r)).toLowerCase() : '');
           return words.every(function (w) { return all.indexOf(w) >= 0; }); });
@@ -579,23 +620,23 @@
     }
     function render() {
       var V = vis(), L = rows(), narrow = el.clientWidth && el.clientWidth < 640 || innerWidth < 640, sel = o.select;
-      var anyF = Object.keys(el._tf).some(function (k) { return el._tf[k]; });
+      var act = FR ? Object.keys(el._tf).filter(function (k) { return byKey[k] && HW.tfActive(el._tf[k]); }) : [], anyF = act.length > 0;
       var bar = FR ? '<div class="row" style="margin-bottom:8px"><div class="search tsearch">' + HW.icon('search') + '<input data-q placeholder="Search everything" value="' + esc(el._q) + '"></div>' +
-        '<span class="small muted">' + L.length + (L.length !== o.rows.length ? ' of ' + o.rows.length : '') + ' rows</span>' + (anyF || el._q ? '<button class="btn-xs btn-g" data-t="x">Clear</button>' : '') + '<span class="grow"></span>' +
-        (narrow ? '<button class="btn-xs' + (el._showF || anyF ? ' btn-p' : '') + '" data-t="f">' + HW.icon('filter') + 'Column filters</button>' : '') + '<button class="btn-xs" data-t="c">' + HW.icon('layers') + 'Columns</button></div>'
+        '<span class="small muted">' + L.length + (L.length !== o.rows.length ? ' of ' + o.rows.length : '') + ' rows</span>' + (anyF || el._q ? '<button class="btn-xs btn-g" data-t="x">Clear all</button>' : '') + '<span class="grow"></span>' +
+        (narrow ? '<button class="btn-xs" data-t="af">' + HW.icon('filter') + 'Filter</button>' : '') + '<button class="btn-xs" data-t="c">' + HW.icon('layers') + 'Columns</button></div>' +
+        (anyF ? '<div class="row wrapn gap4 tfchips" style="margin-bottom:8px;flex-wrap:wrap">' + act.map(function (k) { return '<span class="chip" data-chip="' + k + '">' + HW.icon('filter') + '<span>' + esc(HW.tfLabel(byKey[k], el._tf[k])) + '</span><button class="btn-g" data-chx="' + k + '" title="Remove">×</button></span>'; }).join('') + '</div>' : '')
         : '<div class="row" style="margin-bottom:8px"><span class="small muted">' + L.length + (L.length !== o.rows.length ? ' of ' + o.rows.length : '') + ' rows</span><span class="grow"></span>' +
         '<button class="btn-xs' + (el._showF || Object.keys(el._tf).some(function (k) { return el._tf[k]; }) ? ' btn-p' : '') + '" data-t="f">' + HW.icon('filter') + 'Filters</button><button class="btn-xs" data-t="c">' + HW.icon('layers') + 'Columns</button></div>';
-      var ph = function (c) { return FR ? HW.FILTER_HELP[c.type || 'text'] : 'contains…'; };
-      var tip = FR ? ' title="Comma = or. Numbers: >5 <=20 5..20 !=0 · Times: >14:00, 14:00..15:30, >2026-11-18, 18.11.2026, >-2h · Text: contains, =exact, !not, ^starts, ends$"' : '';
-      var filt = el._showF && (!FR || narrow) ? '<div class="form" style="margin-bottom:8px">' + V.map(function (c) { return '<div class="field"><label>' + esc(c.label) + '</label><input data-f="' + c.key + '" value="' + esc(el._tf[c.key] || '') + '" placeholder="' + esc(ph(c)) + '"' + tip + '></div>'; }).join('') + '</div>' : '';
+      var ph = function () { return 'contains…'; }, tip = '';
+      var filt = el._showF && !FR ? '<div class="form" style="margin-bottom:8px">' + V.map(function (c) { return '<div class="field"><label>' + esc(c.label) + '</label><input data-f="' + c.key + '" value="' + esc(el._tf[c.key] || '') + '" placeholder="' + esc(ph(c)) + '"' + tip + '></div>'; }).join('') + '</div>' : '';
       var body;
       if (!L.length && !(FR && o.rows.length && !narrow)) body = '<div class="empty">' + (o.rows.length ? 'Nothing matches the search or the filters.' : (o.empty || 'Nothing here.')) + '</div>';
       else if (narrow) body = '<div class="tcards">' + L.map(function (r, i) {
         return '<div class="tcard' + (o.onRow ? ' click' : '') + (sel && sel[o.rowKey(r)] ? ' sel' : '') + '" data-i="' + i + '">' + (sel ? '<input type="checkbox" data-s="' + esc(o.rowKey(r)) + '"' + (sel[o.rowKey(r)] ? ' checked' : '') + '>' : '') +
           '<dl>' + V.map(function (c) { return '<dt>' + esc(c.label) + '</dt><dd>' + (c.html ? c.html(r) : esc(txt(c, r))) + '</dd>'; }).join('') + '</dl></div>'; }).join('') + '</div>';
       else body = '<div class="tw"><table class="table"><thead><tr>' + (sel ? '<th class="w0"><input type="checkbox" data-all></th>' : '') +
-        V.map(function (c) { return '<th class="srt' + (c.align === 'r' ? ' r' : '') + '" data-k="' + c.key + '"' + (c.minw ? ' style="min-width:' + c.minw + 'px"' : '') + '>' + esc(c.label) + (st.sort === c.key ? (st.dir > 0 ? ' ▲' : ' ▼') : '') + '</th>'; }).join('') + '</tr>' +
-        (FR ? '<tr class="fr">' + (sel ? '<th class="w0"></th>' : '') + V.map(function (c) { return '<th><input data-f="' + c.key + '" value="' + esc(el._tf[c.key] || '') + '" placeholder="' + esc(ph(c)) + '"' + tip + ' class="' + (el._tf[c.key] ? 'on' : '') + '"></th>'; }).join('') + '</tr>' : '') + '</thead><tbody>' +
+        V.map(function (c) { return '<th class="srt' + (c.align === 'r' ? ' r' : '') + '" data-k="' + c.key + '"' + (c.minw ? ' style="min-width:' + c.minw + 'px"' : '') + '>' + (FR ? '<span class="thf">' : '') + esc(c.label) + (st.sort === c.key ? (st.dir > 0 ? ' ▲' : ' ▼') : '') +
+          (FR ? '<button class="tfb' + (HW.tfActive(el._tf[c.key]) ? ' on' : '') + '" data-tf="' + c.key + '" title="Filter ' + esc(c.label) + '">' + HW.icon('filter') + '</button></span>' : '') + '</th>'; }).join('') + '</tr></thead><tbody>' +
         L.map(function (r, i) { return '<tr data-i="' + i + '" class="' + (o.onRow ? 'click' : '') + (sel && sel[o.rowKey(r)] ? ' sel' : '') + (o.rowClass ? ' ' + o.rowClass(r) : '') + '">' + (sel ? '<td class="w0"><input type="checkbox" data-s="' + esc(o.rowKey(r)) + '"' + (sel[o.rowKey(r)] ? ' checked' : '') + '></td>' : '') +
           V.map(function (c) { return '<td' + (c.align === 'r' ? ' class="r"' : c.nowrap ? ' class="w0"' : '') + '>' + (c.html ? c.html(r) : esc(txt(c, r))) + '</td>'; }).join('') + '</tr>'; }).join('') + '' + (L.length ? '' : '<tr><td colspan="' + (V.length + (sel ? 1 : 0)) + '" class="empty">Nothing matches the search or the filters.</td></tr>') + '</tbody></table></div>';
       var ae = document.activeElement, fk = ae && el.contains(ae) && ae.dataset ? (ae.dataset.q != null ? '__q' : ae.dataset.f) : null, pos = fk ? ae.selectionStart : 0;
@@ -605,6 +646,10 @@
       if (sx && el.querySelector('.tw')) el.querySelector('.tw').scrollLeft = sx;
       if (el.querySelector('[data-t=f]')) el.querySelector('[data-t=f]').onclick = function () { el._showF = !el._showF; render(); };
       if (el.querySelector('[data-t=x]')) el.querySelector('[data-t=x]').onclick = function () { el._tf = {}; el._q = ''; render(); };
+      [].forEach.call(el.querySelectorAll('[data-tf]'), function (b) { b.onclick = function (e) { e.stopPropagation(); openF(b.dataset.tf, b); }; });
+      [].forEach.call(el.querySelectorAll('[data-chip]'), function (ch) { ch.onclick = function (e) { if (e.target.closest('[data-chx]')) { delete el._tf[ch.dataset.chip]; HW.closePops(); render(); return; } openF(ch.dataset.chip, ch); }; });
+      if (el.querySelector('[data-t=af]')) el.querySelector('[data-t=af]').onclick = function () { var b = this;
+        HW.menu(b, V.map(function (c) { return { label: c.label + (HW.tfActive(el._tf[c.key]) ? ' ·  filtered' : ''), icon: 'filter', onClick: function () { setTimeout(function () { openF(c.key, b); }); } }; })); };
       var qi = el.querySelector('[data-q]');
       if (qi) qi.oninput = function () { el._q = qi.value; var p = qi.selectionStart; render(); var n = el.querySelector('[data-q]'); if (n) { n.focus(); n.setSelectionRange(p, p); } };
       el.querySelector('[data-t=c]').onclick = function () { colMenu(this); };
