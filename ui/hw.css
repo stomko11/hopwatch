@@ -275,3 +275,4 @@ details.help>summary::-webkit-details-marker{display:none} details.help>div{padd
 .tfm select,.tfm input[type=number],.tfm input[type=time],.tfm input[type=datetime-local]{height:30px}
 .occr{display:flex;align-items:center;gap:6px;padding:3px 6px;border-radius:7px;text-decoration:none;color:inherit;white-space:nowrap} .occr:hover{background:var(--surface2)} .occr+.occr{margin-top:2px}
 .tcaret{display:inline-block;width:18px;color:var(--text);font-size:15px;line-height:1} .table tr.sub td:first-child{padding-left:30px} .table tr.sub{background:var(--surface2)} .tcard.sub{margin-left:16px}
+.table tr.occsep td{border-top:2px solid var(--border2)}

@@ -471,15 +471,35 @@
     Promise.all([live(), api('/api/mtr?limit=2000&from=' + Math.floor(t0) + '&to=' + Math.ceil(t1))]).then(function (x) {
       var l = x[0], runs = x[1].runs.filter(function (r) { return (r.location || r.host) === loc; });
       var sites = l.probes.map(function (p) { return p.name; }), hosts = {}; runs.forEach(function (r) { hosts[r.host] = 1; });
-      var cell = function (h, s) { var rs = runs.filter(function (r) { return r.host === h && r.probe_name === s; });
+      // rows = moments: a site's own run with the cross-site runs it caused (they name it: "its run #N"),
+      // other runs of the same target and kind within 2 minutes of each other; ICMP and TCP apart
+      var kind = function (r) { return r.mode === 'tcp' ? 'TCP' : r.mode === 'udp' ? 'UDP' : 'ICMP'; }, ts = function (r) { return r.started || r.created; };
+      var waves = [];
+      var hk = {}; runs.forEach(function (r) { var k = r.host + '|' + kind(r); (hk[k] = hk[k] || []).push(r); });
+      Object.keys(hk).sort().forEach(function (k) {
+        var list = hk[k].slice().sort(function (a, b) { return ts(a) - ts(b); }), mine = [], byRun = {};
+        list.filter(function (r) { return r.trig !== 'cross'; }).forEach(function (r) {
+          var w = mine.filter(function (w) { return Math.abs(ts(r) - w.t) <= 120 && !w.by[r.probe_name]; })[0];
+          if (!w) { w = { host: r.host, kind: kind(r), t: ts(r), by: {} }; mine.push(w); }
+          (w.by[r.probe_name] = w.by[r.probe_name] || []).push(r); byRun[r.probe_name + '#' + r.id] = w; });
+        list.filter(function (r) { return r.trig === 'cross'; }).forEach(function (r) {
+          var m = /^(.+?) saw a problem.*its run #(\d+)/.exec(r.reason || ''), w = m && byRun[m[1] + '#' + m[2]];
+          if (!w || w.by[r.probe_name]) w = mine.filter(function (w) { return Math.abs(ts(r) - w.t) <= 120 && !w.by[r.probe_name]; })[0];
+          if (!w) { w = { host: r.host, kind: kind(r), t: ts(r), by: {} }; mine.push(w); }
+          (w.by[r.probe_name] = w.by[r.probe_name] || []).push(r); });
+        mine.sort(function (a, b) { return a.t - b.t; }).forEach(function (w) { waves.push(w); });
+      });
+      var cell = function (w, s) { var rs = w.by[s] || [];
         if (!rs.length) return '<td class="faint small">no run</td>';
-        return '<td>' + rs.map(function (r) { return '<a class="occr" href="#/run?probe=' + encodeURIComponent(r.probe) + '&id=' + r.id + '">' + trigPill(r) + '<span class="num ' + (r.dst_loss >= 20 ? 'bad' : r.dst_loss > 0 ? 'warn' : 'ok') + '">' + (r.dst_loss == null ? r.status : HW.fnum(r.dst_loss) + '%') + '</span><span class="xs muted">' + HW.ftime(r.started || r.created) + '</span></a>'; }).join('') + '</td>'; };
+        return '<td>' + rs.map(function (r) { return '<a class="occr" href="#/run?probe=' + encodeURIComponent(r.probe) + '&id=' + r.id + '">' + trigPill(r) + '<span class="num ' + (r.dst_loss >= 20 ? 'bad' : r.dst_loss > 0 ? 'warn' : 'ok') + '">' + (r.dst_loss == null ? r.status : HW.fnum(r.dst_loss) + '%') + '</span><span class="xs muted">' + HW.ftime(ts(r)) + '</span></a>'; }).join('') + '</td>'; };
       var hs = Object.keys(hosts).sort(), mine = sites.filter(function (s) { return runs.some(function (r) { return r.probe_name === s; }); });
-      $('main').innerHTML = '<div class="kpis">' + kpi('route', 'Runs', runs.length, hs.length + ' IPs') + kpi('server', 'Sites that traced', mine.length + '<span class="small muted"> / ' + sites.length + '</span>', esc(sites.filter(function (s) { return mine.indexOf(s) < 0; }).join(', ') ? 'no run from ' + sites.filter(function (s) { return mine.indexOf(s) < 0; }).join(', ') : 'all sites')) +
+      $('main').innerHTML = '<div class="kpis">' + kpi('route', 'Runs', runs.length, hs.length + ' IPs · ' + waves.length + ' moments') + kpi('server', 'Sites that traced', mine.length + '<span class="small muted"> / ' + sites.length + '</span>', esc(sites.filter(function (s) { return mine.indexOf(s) < 0; }).join(', ') ? 'no run from ' + sites.filter(function (s) { return mine.indexOf(s) < 0; }).join(', ') : 'all sites')) +
         kpi('alert', 'Worst loss at target', HW.fnum(runs.reduce(function (a, r) { return Math.max(a, r.dst_loss || 0); }, 0)) + '%', '') + kpi('box', 'Evidence', '<span class="small">ZIP of this time</span>', '', '#/evidence?from=' + Math.floor(t0 - 300) + '&to=' + Math.ceil(t1 + 300)) + '</div>' +
-        '<div class="card"><div class="hd"><h2>Who traced what</h2><span class="sub">a cell per target and site · click a run to open it, then put another one next to it</span></div><div class="bd"><div class="tw"><table class="table"><thead><tr><th>Target</th>' + sites.map(function (s) { return '<th>' + esc(s) + '</th>'; }).join('') + '</tr></thead><tbody>' +
-        hs.map(function (h) { return '<tr><td class="mono small">' + esc(h) + '</td>' + sites.map(function (s) { return cell(h, s); }).join('') + '</tr>'; }).join('') + '</tbody></table></div>' +
-        '<div class="xs muted mt8">Automatic = the site saw the problem itself · Cross-site = the hub asked because another site saw it.</div></div></div>';
+        '<div class="card"><div class="hd"><h2>Who traced what</h2><span class="sub">one line per moment: a site\u2019s own run next to the cross-site runs it caused · click a run to open it</span></div><div class="bd"><div class="tw"><table class="table"><thead><tr><th>Target</th><th>Moment</th>' + sites.map(function (s) { return '<th>' + esc(s) + '</th>'; }).join('') + '</tr></thead><tbody>' +
+        waves.map(function (w, i) { var first = !i || waves[i - 1].host !== w.host;
+          return '<tr' + (first && i ? ' class="occsep"' : '') + '><td class="mono small">' + (first ? esc(w.host) : '') + '</td><td class="small"><span class="tag">' + w.kind + '</span> ' + HW.ftime(w.t) + (function () { var rs = sites.map(function (s) { return (w.by[s] || [])[0]; }).filter(Boolean);
+            return rs.length > 1 ? ' <a class="btn-xs btn-g" href="#/run?probe=' + encodeURIComponent(rs[0].probe) + '&id=' + rs[0].id + '&cmp=' + encodeURIComponent(rs[1].probe + ':' + rs[1].id) + '">' + I('layers') + 'Side by side</a>' : ''; })() + '</td>' + sites.map(function (s) { return cell(w, s); }).join('') + '</tr>'; }).join('') + '</tbody></table></div>' +
+        '<div class="xs muted mt8">Automatic = the site saw the problem itself · Cross-site = the hub asked because another site saw it · runs of the same target within 2 minutes share a line.</div></div></div>';
     }).catch(fail);
   }
   function vMtr() {
@@ -548,7 +568,8 @@
         '<td><div class="hopbar"><span class="num" style="width:44px;text-align:right">' + HW.fnum(h.Avg) + '</span><div class="bar"><i style="width:' + (h.Avg / mx * 100) + '%;background:var(--accent)"></i></div></div></td><td class="r">' + HW.fnum(h.Best) + '</td><td class="r">' + HW.fnum(h.Wrst) + '</td></tr>'; }).join('') + '</tbody></table></div>';
   }
   function vRun() {
-    var pid = qs('probe'), id = +qs('id'), others = null, cmp = null;
+    var pid = qs('probe'), id = +qs('id'), others = null, cmp = null, want = qs('cmp');      // cmp=probe:id opens with that run next to it
+    if (want) { var wp = want.split(':'); api('/api/run?probe=' + encodeURIComponent(wp[0]) + '&id=' + (+wp[1])).then(function (x) { cmp = x; draw(); }).catch(function () { /* just not shown */ }); }
     head('MTR run', '');
     function draw() {
       api('/api/run?probe=' + encodeURIComponent(pid) + '&id=' + id).then(function (r) {
