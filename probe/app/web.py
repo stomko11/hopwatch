@@ -248,6 +248,37 @@ def api_config_put(h, q, _):
     return h.app.cfg.public()
 
 
+def api_metrics(h, q, _):
+    """Prometheus text format: per target the alert-window values (loss, latency, jitter, status),
+    plus MTR runs of the last hour. Scrape /api/metrics (anonymous unless viewing needs a login;
+    then use a token as bearer)."""
+    a = h.app
+    c = a.cfg.get()
+    rows = a.pinger.status()
+    esc = lambda v: str(v or "").replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")
+    out = ["# HELP hopwatch_info Probe version and site", "# TYPE hopwatch_info gauge",
+           f'hopwatch_info{{site="{esc(c.get("site_name"))}",version="{VERSION}"}} 1',
+           f"# HELP hopwatch_window_seconds Window the target values are measured over", "# TYPE hopwatch_window_seconds gauge",
+           f"hopwatch_window_seconds {c['alerts']['window_s']}"]
+    fams = [("loss_percent", "loss", "Packet loss over the window"), ("rtt_ms", "avg", "Average round trip over the window"),
+            ("jitter_ms", "jitter", "Jitter over the window"), ("sent", "sent", "Pings sent in the window")]
+    ST = {"ok": 0, "warn": 1, "crit": 2, "down": 3}
+    lab = lambda r: (f'host="{esc(r["host"])}",name="{esc(r.get("name"))}",location="{esc(r.get("dc"))}",'
+                     f'role="{esc(r.get("role"))}",group="{esc(r.get("group"))}"')
+    for name, key, help_ in fams:
+        out += [f"# HELP hopwatch_target_{name} {help_}", f"# TYPE hopwatch_target_{name} gauge"]
+        out += [f"hopwatch_target_{name}{{{lab(r)}}} {r[key]}" for r in rows if r.get("enabled") and r.get(key) is not None]
+    out += ["# HELP hopwatch_target_status 0 ok, 1 warning, 2 critical, 3 down", "# TYPE hopwatch_target_status gauge"]
+    out += [f"hopwatch_target_status{{{lab(r)}}} {ST[r['status']]}" for r in rows if r.get("status") in ST]
+    runs = a.store.mtr_list(1000, None, time.time() - 3600, None, None, None)
+    by = {}
+    for r in runs:
+        by[r["trig"]] = by.get(r["trig"], 0) + 1
+    out += ["# HELP hopwatch_mtr_runs_last_hour MTR runs started in the last hour by trigger", "# TYPE hopwatch_mtr_runs_last_hour gauge"]
+    out += [f'hopwatch_mtr_runs_last_hour{{trigger="{t}"}} {by.get(t, 0)}' for t in ("auto", "cross", "manual", "schedule")]
+    h._send(200, ("\n".join(out) + "\n").encode(), "text/plain; version=0.0.4; charset=utf-8")
+
+
 def api_tcpcheck(h, q, _):
     h.app.mtr.tcp_check_now()
     return {"ok": True}
@@ -323,6 +354,7 @@ ROUTES = {
     ("GET", "/api/series"): (api_series, "view"),
     ("GET", "/api/events"): (api_events, "view"),
     ("GET", "/api/mtr"): (api_mtr_list, "view"),
+    ("GET", "/api/metrics"): (api_metrics, "view"),
     ("GET", "/api/mtr/{id}"): (api_mtr_get, "view"),
     ("GET", "/api/mtr/report/{id}"): (api_mtr_report, "view"),
     ("GET", "/api/mtr/export"): (api_mtr_export, "view"),

@@ -106,6 +106,16 @@ login or `Authorization: Bearer <token>`. Browser requests that change something
 | `GET /api/evidence?from=&to=&host=&location=&note=` | evidence pack (ZIP) |
 | `GET /api/events` | status changes and automatic MTR runs |
 | `GET` / `PUT /api/config` | settings |
+| `GET /api/metrics` | Prometheus text: loss, latency, jitter and status per target over the alert window, MTR runs in the last hour |
+
+Prometheus scrape example:
+
+```yaml
+- job_name: hopwatch
+  metrics_path: /api/metrics
+  static_configs:
+    - targets: ["probe-host:8095"]
+```
 
 ## Development
 

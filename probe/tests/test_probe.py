@@ -340,3 +340,23 @@ class SeriesAggTest(unittest.TestCase):
         avg = web.api_series(h, {"from": "0", "to": "60", "group": "role"}, None)["series"][0]["points"][0][2]
         worst = web.api_series(h, {"from": "0", "to": "60", "group": "role", "agg": "worst"}, None)["series"][0]["points"][0][2]
         self.assertEqual((avg, worst), (12.5, 25.0))
+
+
+class MetricsTest(unittest.TestCase):
+    """/api/metrics: Prometheus text with escaped labels."""
+    def test_text(self):
+        import web
+        c = config.validate({"site_name": 'Site "A"', "roles": [{"name": "Servers"}],
+                             "targets": [{"name": "x", "location": "DC1", "host": "192.0.2.1", "role": "Servers"}]})
+        row = {**c["targets"][0], "dc": "DC1", "group": "DC1 · Servers", "loss": 2.5, "avg": 10.1, "jitter": 0.4, "sent": 60, "status": "warn"}
+        a = type("A", (), {})()
+        a.cfg = type("C", (), {"get": lambda s: c})()
+        a.pinger = type("P", (), {"status": lambda s: [row]})()
+        a.store = type("S", (), {"mtr_list": lambda s, *x: [{"trig": "auto"}]})()
+        got = {}
+        h = type("H", (), {"app": a, "_send": lambda s, code, data, ct: got.update(text=data.decode(), ct=ct)})()
+        web.api_metrics(h, {}, None)
+        self.assertIn('hopwatch_info{site="Site \\"A\\"",version=', got["text"])
+        self.assertIn('hopwatch_target_loss_percent{host="192.0.2.1",name="x",location="DC1",role="Servers",group="DC1 · Servers"} 2.5', got["text"])
+        self.assertIn('hopwatch_target_status{', got["text"])
+        self.assertTrue(got["ct"].startswith("text/plain"))
