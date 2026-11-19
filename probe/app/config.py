@@ -10,7 +10,7 @@ import os
 import re
 import threading
 
-VERSION = "0.2.14"
+VERSION = "0.2.15"
 
 DEFAULTS = {
     "site_name": "",
@@ -28,7 +28,7 @@ DEFAULTS = {
     "alerts": {"window_s": 60, "loss_warn": 5, "loss_crit": 20, "rtt_warn_ms": 0, "rtt_crit_ms": 0},
     # Automatic MTR: when something goes wrong (and once more when it is fixed), so there is evidence
     "auto_mtr": {"enabled": True, "loss_pct": 20, "window_s": 60, "cooldown_min": 30,
-                 "per_location": True, "max_per_hour": 20, "mode": "icmp",
+                 "per_location": True, "max_per_hour": 20, "mode": "both",
                  "on_down": True, "on_latency": False, "latency_ms": 0, "latency_rise_ms": 100,
                  "on_recovery": True},
     # Periodic MTR: a baseline of the normal path, to compare with when there is a problem
@@ -70,7 +70,7 @@ LIMITS = {
 BOOLS = {("auto_mtr", "enabled"), ("auto_mtr", "per_location"), ("auto_mtr", "on_down"), ("auto_mtr", "on_latency"),
          ("auto_mtr", "on_recovery"), ("mtr", "resolve"), ("mtr", "asn"),
          ("tcp_check", "enabled"), ("security", "view_requires_login")}
-CHOICES = {("auto_mtr", "mode"): ("icmp", "tcp", "tcp_if_open")}
+CHOICES = {("auto_mtr", "mode"): ("icmp", "tcp", "tcp_if_open", "both")}
 
 _HOST_RE = re.compile(r"^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,62})(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,62}))*\.?$")
 

@@ -279,9 +279,11 @@ class CrossCapture:
 
     def _one(self, origin, r, ps, x, now):
         host = r["host"]
+        kind = "tcp" if r.get("mode") == "tcp" else "icmp"      # an ICMP and a TCP run of the same moment are both mirrored
+        ck = host + "|" + kind
         while self.sent and self.sent[0] < now - 3600:
             self.sent.popleft()
-        if now - self.last.get(host, 0) < x["cooldown_min"] * 60:
+        if now - self.last.get(ck, 0) < x["cooldown_min"] * 60:
             return
         if len(self.sent) >= x["max_per_hour"]:
             self._note(now, host, origin, [], "hourly cap reached")
@@ -293,15 +295,16 @@ class CrossCapture:
             if not any(t["host"] == host and t["enabled"] for t in st.get("targets", [])):
                 return "no such target"
             own = self.call(p, f"/api/mtr?host={urllib.parse.quote(host)}&from={int(t0)}&limit=5", timeout=10)
-            if [o for o in own.get("runs", []) if o.get("status") != "failed"]:
+            if [o for o in own.get("runs", []) if o.get("status") != "failed" and ("tcp" if o.get("mode") == "tcp" else "icmp") == kind]:
                 return "has its own run"
-            body = {"hosts": [host], "mode": r.get("mode") or "icmp", "port": r.get("port"), "cycles": r.get("cycles"),
+            # TCP only where this probe's own port check says the target answers
+            body = {"hosts": [host], "mode": "tcp_if_open" if kind == "tcp" else (r.get("mode") or "icmp"), "port": r.get("port"), "cycles": r.get("cycles"),
                     "trig": "cross", "note": f"{origin['name']} saw a problem ({r.get('reason') or 'automatic'}), its run #{r['id']}"}
             return "started #" + ",".join(str(i) for i in self.call(p, "/api/mtr", body, timeout=20).get("ids", []))
         others = [p for p in ps if p["id"] != origin["id"]]
         out = self.each(others, ask)
         started = [p["name"] for p in others if str(out.get(p["id"], "")).startswith("started")]
-        self.last[host] = now
+        self.last[ck] = now
         if started:
             self.sent.append(now)
         self._note(now, host, origin, [(p["name"], out.get(p["id"]) if not isinstance(out.get(p["id"]), dict)

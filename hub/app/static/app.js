@@ -264,11 +264,26 @@
       onKpi({ several: function () { f.view = 'common'; f.only = 'bad'; HW.ls('hovf', f); onlySeg.set('bad'); viewSeg(); charts(); draw(); $('mx').scrollIntoView({ behavior: 'smooth', block: 'start' }); } });
       $('pstrip').innerHTML = ps.map(function (p) { var bad = (p.targets || []).filter(function (t) { return RANK[t.status] >= 2; }).length;
         return '<span class="pill ' + (p.error && !p.targets ? 'bad' : bad ? 'warn' : 'ok') + '" title="' + esc(p.error || p.url) + '">' + I('server') + esc(p.name) + (p.targets ? ' · ' + p.targets.length + ' targets' + (bad ? ' · ' + bad + ' with problems now' : '') : ' · ' + esc(p.error || 'offline')) + '</span>'; }).join('');
+      // a location with roles is one row (e.g. IAD2) that opens into its groups (IAD2 · ISP, IAD2 · FX)
+      var vr0 = { bad: 2, warn: 1, ok: 0 }, parentOf = {}, bases = {};
+      var baseOf = function (x) { return x.indexOf(' · ') > 0 ? x.split(' · ')[0] : x; };
+      order.forEach(function (x) { var b = baseOf(x); (bases[b] = bases[b] || []).push(x); });
+      Object.keys(bases).forEach(function (b) { var g = bases[b]; if (g.length < 2 && g[0] === b) return;
+        var pk = 'dc:' + b, P = locs[pk] = { hosts: {}, by: {}, kids: g, name: b };
+        g.forEach(function (x) { parentOf[x] = pk; var L = locs[x]; Object.keys(L.hosts).forEach(function (h) { P.hosts[h] = 1; });
+          Object.keys(L.by).forEach(function (pid) { var c = L.by[pid], d = P.by[pid] = P.by[pid] || { st: 'disabled', avgs: [], loss: 0, max: 0 };
+            if (RANK[c.st] > RANK[d.st]) d.st = c.st; if (c.avgv != null) d.avgs.push(c.avgv); d.loss = Math.max(d.loss, c.loss || 0); d.max = Math.max(d.max, c.max || 0); }); });
+        Object.keys(P.by).forEach(function (pid) { var d = P.by[pid]; d.avgv = d.avgs.length ? d.avgs.reduce(function (a, v) { return a + v; }, 0) / d.avgs.length : null; }); });
+      var verdict1 = verdict;
+      verdict = function (L) { if (!L.kids) return verdict1(L);
+        return L.kids.reduce(function (best, x) { var v = verdict1(locs[x]); return !best || vr0[v[0]] > vr0[best[0]] ? [v[0], v[0] === 'ok' ? 'OK' : (x.split(' · ')[1] || x) + ': ' + v[1]] : best; }, null); };
       var rows = order.filter(function (x) { var L = locs[x];
         if (f.locs.length && f.locs.indexOf(x) < 0) return false;
         if (f.only === 'bad' && (vname ? verdict(L)[0] === 'ok' : verdict(L)[0] !== 'bad')) return false;
         return !f.q || x.toLowerCase().indexOf(f.q) >= 0 || Object.keys(L.hosts).some(function (h) { return h.indexOf(f.q) >= 0; }); })
         .sort(function (a, b) { var r = { bad: 2, warn: 1, ok: 0 }; return r[verdict(locs[b])[0]] - r[verdict(locs[a])[0]] || a.localeCompare(b); });
+      var items = rows.concat(rows.map(function (x) { return parentOf[x]; }).filter(function (p, i, a) { return p && a.indexOf(p) === i; }))
+        .sort(function (a, b) { return vr0[verdict(locs[b])[0]] - vr0[verdict(locs[a])[0]] || (locs[a].name || a).localeCompare(locs[b].name || b); });
       $('ovSub').textContent = (f.only === 'bad' ? rows.length + ' of ' + order.length + ' locations: ' + (vname ? 'where ' + vname + ' saw ' : 'where ' + (K > 1 && !ov ? K + ' sites' : (ov && ov.all_sites ? 'all ' + K + ' sites' : 'at least ' + K + ' sites')) + ' saw at the same moment ') + (live ? 'problems' : sigName) : order.length + ' locations') +
         ' · ' + (live ? 'live, last ' + l.probes.filter(function (p) { return p.window_s; }).map(function (p) { return p.window_s; })[0] + ' s' : rl + ', values are the average and the worst moment');
       $('ovUpd').textContent = 'updated ' + HW.ftime(l.now);
@@ -279,6 +294,7 @@
       var vr = { bad: 2, warn: 1, ok: 0 };
       // with an ISP-edge role in the location: is the problem behind the ISP's gateway or at it?
       var where = function (x) {
+        if (locs[x] && locs[x].kids) return locs[x].kids.map(where).filter(Boolean).sort(function (a, b) { return /past/.test(a) - /past/.test(b); })[0] || '';
         var parts = x.split(' · '), base = parts[0], role = parts[1];
         if (!role || verdict(locs[x])[0] === 'ok') return '';
         var edge = order.filter(function (k) { var pr = k.split(' · '); return pr[0] === base && pr[1] && upRoles[pr[1]]; });
@@ -286,17 +302,21 @@
         if (upRoles[role]) return 'at the ISP edge or before it';
         return edge.every(function (k) { return verdict(locs[k])[0] === 'ok'; }) ? 'past the ISP edge (it is clean)' : 'ISP edge affected too';
       };
-      var cols = [{ key: 'loc', label: 'Location', text: function (x) { return x; }, html: function (x) { return '<b>' + esc(x) + '</b> <span class="xs muted">' + Object.keys(locs[x].hosts).length + ' IP</span>'; } }]
+      var cols = [{ key: 'loc', label: 'Location', text: function (x) { return locs[x].name || x; }, html: function (x) { var L = locs[x], n = Object.keys(L.hosts).length;
+          if (L.kids) return '<b>' + esc(L.name) + '</b> <span class="xs muted">' + L.kids.map(function (k) { return k.split(' · ')[1] || '(no role)'; }).join(', ') + ' · ' + n + ' IP</span>';
+          if (parentOf[x]) { var role = x.split(' · ')[1] || '(no role)'; return '<b>' + esc(role) + '</b>' + (upRoles[role] ? ' <span class="tag">ISP edge</span>' : '') + ' <span class="xs muted">' + n + ' IP</span>'; }
+          return '<b>' + esc(x) + '</b> <span class="xs muted">' + n + ' IP</span>'; } }]
         .concat(ps.map(function (p) { return { key: 'p:' + p.id, label: p.name, text: function (x) { var c = locs[x].by[p.id]; return c ? HW.fnum(c.avgv) + ' ms ' + HW.fnum(c.loss, 0) + '%' : ''; },
           sort: function (x) { var c = locs[x].by[p.id]; return c ? (c.loss || 0) * 1000 + (c.avgv || 0) : -1; }, html: function (x) { return cell(locs[x].by[p.id]); } }; }))
         .concat([{ key: 'where', label: 'Where', text: function (x) { return where(x); }, html: function (x) { var w = where(x); return w ? '<span class="small ' + (/past/.test(w) ? 'warn' : 'bad') + '">' + esc(w) + '</span>' : '<span class="faint">–</span>'; } },
           { key: 'verdict', label: 'Verdict', text: function (x) { return verdict(locs[x])[1]; }, sort: function (x) { return vr[verdict(locs[x])[0]]; }, html: function (x) { var v = verdict(locs[x]); return '<span class="pill ' + v[0] + '">' + esc(v[1]) + '</span>'; } },
-          { key: 'more', label: 'More', text: function () { return ''; }, html: function (x) { return '<button class="btn-xs btn-g btn-i" data-loc="' + esc(x) + '">' + I('more') + '</button>'; } }]);
+          { key: 'more', label: 'More', text: function () { return ''; }, html: function (x) { return locs[x].kids ? '' : '<button class="btn-xs btn-g btn-i" data-loc="' + esc(x) + '">' + I('more') + '</button>'; } }]);
       var mxKey = 'hub-ov-' + ps.map(function (p) { return p.id; }).join('-');
       // a location opens its MTR occasions of this window (live: the last 24 hours)
       var locGo = function (x) { var w = live ? { from: Date.now() / 1000 - 86400, to: Date.now() / 1000 } : rp.get();
         location.hash = '#/mtr?view=occ&loc=' + encodeURIComponent(x) + '&from=' + Math.floor(w.from) + '&to=' + Math.ceil(w.to); };
-      var mxo = { id: mxKey, rows: rows, columns: cols, empty: 'No locations match.', onRow: locGo };
+      var mxo = { id: mxKey, rows: items, columns: cols, empty: 'No locations match.', onRow: locGo, unit: 'locations',
+        tree: { key: function (x) { return x; }, parent: function (x) { return parentOf[x] || null; } } };
       if (!S.mx || S.mx.key !== mxKey) S.mx = { key: mxKey, t: HW.table($('mx'), mxo) };
       else { S.mx.t = HW.table($('mx'), mxo); }
       [].forEach.call($('mx').querySelectorAll('[data-loc]'), function (b) { b.onclick = function () { var x = b.dataset.loc, hs = Object.keys(locs[x].hosts);

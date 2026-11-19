@@ -26,6 +26,7 @@
     sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
     moon: '<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>',
     monitor: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>',
+    themeauto: '<circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor"/>',
     clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
     plus: '<path d="M12 5v14M5 12h14"/>',
     trash: '<path d="M3 6h18M8 6V4h8v2m-9 0 1 14h8l1-14"/>',
@@ -59,12 +60,16 @@
   HW.tz = HW.ls('tz') || 'utc';
   HW.TZ = [['utc', 'UTC'], ['local', 'Local']];
   HW.THEMES = [['auto', 'Auto'], ['dark', 'Dark'], ['light', 'Light']];
-  /* theme as icons, in the same segmented style as UTC / Local: light, dark, follow the system */
+  /* theme as one icon in the style of the UTC / Local switch; a click goes auto → light → dark → auto */
+  var TH = { auto: ['themeauto', 'Theme: follows the system'], light: ['sun', 'Theme: light'], dark: ['moon', 'Theme: dark'] };
   HW.themeSeg = function (el, onChange) {
-    var it = [['light', HW.icon('sun'), 'Light', 1], ['dark', HW.icon('moon'), 'Dark', 1], ['auto', HW.icon('monitor'), 'Follow the system', 1]];
-    var s = HW.seg(el, it, HW.ls('theme') || 'auto', function (v) { HW.theme(v); if (onChange) onChange(v); });
-    el.classList.add('seg-i');
-    return s;
+    el.className = 'seg seg-i';
+    var draw = function () { var t = HW.ls('theme') || 'auto';
+      el.innerHTML = '<button type="button" class="on" title="' + TH[t][1] + ' – click to change" aria-label="' + TH[t][1] + '">' + HW.icon(TH[t][0]) + '</button>'; };
+    el.onclick = function () { var t = HW.ls('theme') || 'auto', nx = { auto: 'light', light: 'dark', dark: 'auto' }[t];
+      HW.theme(nx); draw(); if (HW.toast) HW.toast(TH[nx][1]); if (onChange) onChange(nx); };
+    draw();
+    return { set: draw };
   };
   function P2(n) { return (n < 10 ? '0' : '') + n; }
   HW.parts = function (ms) { var d = new Date(ms), u = HW.tz === 'utc';
@@ -594,7 +599,10 @@
     if (!st.order || st.order.length !== cols.length || st.order.some(function (k) { return !byKey[k]; })) st.order = cols.map(function (c) { return c.key; });
     if (!st.hidden) st.hidden = cols.filter(function (c) { return c.hide; }).map(function (c) { return c.key; });
     el._tf = el._tf || {}; el._showF = el._showF || false; el._q = el._q || '';
-    var FR = !!o.filterRow;
+    var FR = !!o.filterRow, T = o.tree || null;     // tree: {key(row), parent(row) -> parent key or null}
+    el._open = el._open || {};
+    var kidsOf = function (r) { return T && !T.parent(r) ? o.rows.filter(function (x) { return T.parent(x) === T.key(r); }).length : 0; };
+    var caret = function (r, i) { if (!T || i) return ''; var n = kidsOf(r); return n ? '<span class="tcaret">' + (el._open[T.key(r)] ? '▾' : '▸') + '</span>' : (T.parent(r) ? '<span class="tcaret sub"></span>' : '<span class="tcaret"></span>'); };
     var facet = function (c, r) { return c.facet ? String(c.facet(r) == null ? '' : c.facet(r)) : txt(c, r); };
     var facets = function (c) { var m = {}; o.rows.forEach(function (r) { var v = facet(c, r); m[v] = (m[v] || 0) + 1; });
       return Object.keys(m).map(function (k) { return [k, m[k]]; }).sort(function (a, b) { return b[1] - a[1] || String(a[0]).localeCompare(String(b[0])); }); };
@@ -616,29 +624,39 @@
       } else list = o.rows.filter(function (r) { return Object.keys(el._tf).every(function (k) { var f = (el._tf[k] || '').toLowerCase().trim(); return !f || !byKey[k] || txt(byKey[k], r).toLowerCase().indexOf(f) >= 0; }); });
       if (st.sort && byKey[st.sort]) { var c = byKey[st.sort], sv = c.sort || function (r) { var t = txt(c, r), n = parseFloat(t); return isNaN(n) || /[a-z]/i.test(t.replace(/ms|%/g, '')) ? t.toLowerCase() : n; };
         list = list.slice().sort(function (a, b) { var x = sv(a), y = sv(b); return (x > y ? 1 : x < y ? -1 : 0) * st.dir; }); }
-      return list;
+      if (!T) return list;
+      // tree: a parent shows when it or one of its children passes the filters; open parents get their children right after them
+      var pass = new Set(list), out = [], order = list.concat(o.rows.filter(function (r) { return !pass.has(r); }));
+      order.filter(function (r) { return !T.parent(r); }).forEach(function (p) {
+        var k = T.key(p), kids = list.filter(function (r) { return T.parent(r) === k; });
+        if (!pass.has(p) && !kids.length) return;
+        out.push(p);
+        if (el._open[k]) (pass.has(p) ? order.filter(function (r) { return T.parent(r) === k; }) : kids).forEach(function (r) { out.push(r); });
+      });
+      return out;
     }
     function render() {
       var V = vis(), L = rows(), narrow = el.clientWidth && el.clientWidth < 640 || innerWidth < 640, sel = o.select;
+      var nL = T ? L.filter(function (r) { return !T.parent(r); }).length : L.length, nA = T ? o.rows.filter(function (r) { return !T.parent(r); }).length : o.rows.length;
       var act = FR ? Object.keys(el._tf).filter(function (k) { return byKey[k] && HW.tfActive(el._tf[k]); }) : [], anyF = act.length > 0;
       var bar = FR ? '<div class="row" style="margin-bottom:8px"><div class="search tsearch">' + HW.icon('search') + '<input data-q placeholder="Search everything" value="' + esc(el._q) + '"></div>' +
-        '<span class="small muted">' + L.length + (L.length !== o.rows.length ? ' of ' + o.rows.length : '') + ' rows</span>' + (anyF || el._q ? '<button class="btn-xs btn-g" data-t="x">Clear all</button>' : '') + '<span class="grow"></span>' +
+        '<span class="small muted">' + nL + (nL !== nA ? ' of ' + nA : '') + ' ' + (o.unit || 'rows') + '</span>' + (anyF || el._q ? '<button class="btn-xs btn-g" data-t="x">Clear all</button>' : '') + '<span class="grow"></span>' +
         (narrow ? '<button class="btn-xs" data-t="af">' + HW.icon('filter') + 'Filter</button>' : '') + '<button class="btn-xs" data-t="c">' + HW.icon('layers') + 'Columns</button></div>' +
         (anyF ? '<div class="row wrapn gap4 tfchips" style="margin-bottom:8px;flex-wrap:wrap">' + act.map(function (k) { return '<span class="chip" data-chip="' + k + '">' + HW.icon('filter') + '<span>' + esc(HW.tfLabel(byKey[k], el._tf[k])) + '</span><button class="btn-g" data-chx="' + k + '" title="Remove">×</button></span>'; }).join('') + '</div>' : '')
-        : '<div class="row" style="margin-bottom:8px"><span class="small muted">' + L.length + (L.length !== o.rows.length ? ' of ' + o.rows.length : '') + ' rows</span><span class="grow"></span>' +
+        : '<div class="row" style="margin-bottom:8px"><span class="small muted">' + nL + (nL !== nA ? ' of ' + nA : '') + ' ' + (o.unit || 'rows') + '</span><span class="grow"></span>' +
         '<button class="btn-xs' + (el._showF || Object.keys(el._tf).some(function (k) { return el._tf[k]; }) ? ' btn-p' : '') + '" data-t="f">' + HW.icon('filter') + 'Filters</button><button class="btn-xs" data-t="c">' + HW.icon('layers') + 'Columns</button></div>';
       var ph = function () { return 'contains…'; }, tip = '';
       var filt = el._showF && !FR ? '<div class="form" style="margin-bottom:8px">' + V.map(function (c) { return '<div class="field"><label>' + esc(c.label) + '</label><input data-f="' + c.key + '" value="' + esc(el._tf[c.key] || '') + '" placeholder="' + esc(ph(c)) + '"' + tip + '></div>'; }).join('') + '</div>' : '';
       var body;
       if (!L.length && !(FR && o.rows.length && !narrow)) body = '<div class="empty">' + (o.rows.length ? 'Nothing matches the search or the filters.' : (o.empty || 'Nothing here.')) + '</div>';
       else if (narrow) body = '<div class="tcards">' + L.map(function (r, i) {
-        return '<div class="tcard' + (o.onRow ? ' click' : '') + (sel && sel[o.rowKey(r)] ? ' sel' : '') + '" data-i="' + i + '">' + (sel ? '<input type="checkbox" data-s="' + esc(o.rowKey(r)) + '"' + (sel[o.rowKey(r)] ? ' checked' : '') + '>' : '') +
+        return '<div class="tcard' + (o.onRow || kidsOf(r) ? ' click' : '') + (T && T.parent(r) ? ' sub' : '') + (sel && sel[o.rowKey(r)] ? ' sel' : '') + '" data-i="' + i + '">' + (T && kidsOf(r) ? '<div class="xs muted">' + caret(r, 0) + kidsOf(r) + ' groups – tap to ' + (el._open[T.key(r)] ? 'close' : 'open') + '</div>' : '') + (sel ? '<input type="checkbox" data-s="' + esc(o.rowKey(r)) + '"' + (sel[o.rowKey(r)] ? ' checked' : '') + '>' : '') +
           '<dl>' + V.map(function (c) { return '<dt>' + esc(c.label) + '</dt><dd>' + (c.html ? c.html(r) : esc(txt(c, r))) + '</dd>'; }).join('') + '</dl></div>'; }).join('') + '</div>';
       else body = '<div class="tw"><table class="table"><thead><tr>' + (sel ? '<th class="w0"><input type="checkbox" data-all></th>' : '') +
         V.map(function (c) { return '<th class="srt' + (c.align === 'r' ? ' r' : '') + '" data-k="' + c.key + '"' + (c.minw ? ' style="min-width:' + c.minw + 'px"' : '') + '>' + (FR ? '<span class="thf">' : '') + esc(c.label) + (st.sort === c.key ? (st.dir > 0 ? ' ▲' : ' ▼') : '') +
           (FR ? '<button class="tfb' + (HW.tfActive(el._tf[c.key]) ? ' on' : '') + '" data-tf="' + c.key + '" title="Filter ' + esc(c.label) + '">' + HW.icon('filter') + '</button></span>' : '') + '</th>'; }).join('') + '</tr></thead><tbody>' +
-        L.map(function (r, i) { return '<tr data-i="' + i + '" class="' + (o.onRow ? 'click' : '') + (sel && sel[o.rowKey(r)] ? ' sel' : '') + (o.rowClass ? ' ' + o.rowClass(r) : '') + '">' + (sel ? '<td class="w0"><input type="checkbox" data-s="' + esc(o.rowKey(r)) + '"' + (sel[o.rowKey(r)] ? ' checked' : '') + '></td>' : '') +
-          V.map(function (c) { return '<td' + (c.align === 'r' ? ' class="r"' : c.nowrap ? ' class="w0"' : '') + '>' + (c.html ? c.html(r) : esc(txt(c, r))) + '</td>'; }).join('') + '</tr>'; }).join('') + '' + (L.length ? '' : '<tr><td colspan="' + (V.length + (sel ? 1 : 0)) + '" class="empty">Nothing matches the search or the filters.</td></tr>') + '</tbody></table></div>';
+        L.map(function (r, i) { return '<tr data-i="' + i + '" class="' + (o.onRow || kidsOf(r) ? 'click' : '') + (T && T.parent(r) ? ' sub' : '') + (sel && sel[o.rowKey(r)] ? ' sel' : '') + (o.rowClass ? ' ' + o.rowClass(r) : '') + '">' + (sel ? '<td class="w0"><input type="checkbox" data-s="' + esc(o.rowKey(r)) + '"' + (sel[o.rowKey(r)] ? ' checked' : '') + '></td>' : '') +
+          V.map(function (c, ci) { return '<td' + (c.align === 'r' ? ' class="r"' : c.nowrap ? ' class="w0"' : '') + '>' + caret(r, ci) + (c.html ? c.html(r) : esc(txt(c, r))) + '</td>'; }).join('') + '</tr>'; }).join('') + '' + (L.length ? '' : '<tr><td colspan="' + (V.length + (sel ? 1 : 0)) + '" class="empty">Nothing matches the search or the filters.</td></tr>') + '</tbody></table></div>';
       var ae = document.activeElement, fk = ae && el.contains(ae) && ae.dataset ? (ae.dataset.q != null ? '__q' : ae.dataset.f) : null, pos = fk ? ae.selectionStart : 0;
       var sx = el.querySelector('.tw') ? el.querySelector('.tw').scrollLeft : 0;
       el.innerHTML = bar + filt + body;
@@ -660,7 +678,9 @@
         var cb = e.target.closest('[data-s]');
         if (cb && sel) { if (cb.checked) sel[cb.dataset.s] = 1; else delete sel[cb.dataset.s]; render(); if (o.onSelect) o.onSelect(); return; }
         if (e.target.closest('a,button,input')) return;
-        if (o.onRow) o.onRow(L[+row.dataset.i]); }; });
+        var it = L[+row.dataset.i];
+        if (T && kidsOf(it)) { var k = T.key(it); el._open[k] = !el._open[k]; render(); return; }
+        if (o.onRow) o.onRow(it); }; });
       var all = el.querySelector('[data-all]');
       if (all && sel) { all.checked = L.length && L.every(function (r) { return sel[o.rowKey(r)]; });
         all.onclick = function () { L.forEach(function (r) { if (all.checked) sel[o.rowKey(r)] = 1; else delete sel[o.rowKey(r)]; }); render(); if (o.onSelect) o.onSelect(); }; }

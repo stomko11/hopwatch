@@ -243,6 +243,15 @@ class AutoMtrTest(unittest.TestCase):
         self.assertIn("loss 50%", run["reason"])
 
 
+class BothModesTest(AutoMtrTest):
+    def test_icmp_and_tcp_where_it_answers(self):
+        self.r.tcp["192.0.2.3"] = {"state": "open"}
+        self.r.consider(self.host("192.0.2.3", 2), "M", self.c, self.p)      # answers on the port: ICMP + TCP
+        self.r.consider(self.host("192.0.2.1", 2), "L", self.c, self.p)      # doesn't: ICMP only
+        modes = sorted((self.r.store.mtr_get(q[1])["host"], self.r.store.mtr_get(q[1])["mode"]) for q in self.r.queue)
+        self.assertEqual(modes, [("192.0.2.1", "icmp"), ("192.0.2.3", "icmp"), ("192.0.2.3", "tcp")])
+
+
 class TriggerTest(AutoMtrTest):
     def test_down_latency_recovery(self):
         st = self.host("192.0.2.1", 50)

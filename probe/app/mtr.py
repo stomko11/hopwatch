@@ -273,11 +273,16 @@ class MtrRunner:
             return
         self.auto_last[key] = now
         self.auto_times.append(now)
-        try:
-            rid = self.request(host, mode=a["mode"], trig="auto", reason=reason)
-            self.store.event("auto_mtr", host=host, location=location, level="info", mtr_id=rid, reason=reason)
-        except ValueError as e:
-            log.info("automatic MTR not started: %s", e)
+        # "both": ICMP always, and TCP too when the target answers on the TCP port (support often asks
+        # for both: ICMP shows every hop, TCP the path real traffic takes past ICMP limits)
+        tcp_ok = (self.tcp.get(host) or {}).get("state") in ("open", "refused")
+        modes = ["icmp"] + (["tcp"] if tcp_ok else []) if a["mode"] == "both" else [a["mode"]]
+        for mode in modes:
+            try:
+                rid = self.request(host, mode=mode, trig="auto", reason=reason)
+                self.store.event("auto_mtr", host=host, location=location, level="info", mtr_id=rid, reason=reason)
+            except ValueError as e:
+                log.info("automatic MTR not started: %s", e)
 
     def on_status(self, host, location, old, new, c) -> None:
         """After an outage: one more run, so the evidence shows the path when it works again."""
