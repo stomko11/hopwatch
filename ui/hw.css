@@ -262,3 +262,4 @@ details.help>summary::-webkit-details-marker{display:none} details.help>div{padd
 .seg.seg-i button{padding:0 7px;display:inline-flex;align-items:center;justify-content:center} .seg.seg-i svg{width:15px;height:15px}
 .sysec{padding:10px 0;border-top:1px solid var(--border)} .sysec:first-of-type{border-top:0} td.sydiff{color:var(--warn);font-weight:600}
 .side .seg button{padding:0 8px} .side .seg.seg-i button{padding:0 6px} .side .row.wrapn{gap:6px}
+.kpi.click{display:block;width:100%;text-align:left;color:inherit;font:inherit;cursor:pointer;text-decoration:none;transition:border-color .15s,transform .15s} .kpi.click:hover{border-color:var(--accent)} .kpi.click:active{transform:scale(.99)}

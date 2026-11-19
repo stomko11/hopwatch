@@ -153,7 +153,7 @@
     var RNG = [['live', 'Live'], ['900', '15m'], ['3600', '1h'], ['10800', '3h'], ['21600', '6h'], ['86400', '24h']];
     HW.seg($('ovR'), RNG, f.range, function (v) { f.range = v; HW.ls('ovf', f); agg = {}; loadSpark(); draw(); });
     $('ovQ').oninput = function () { f.q = this.value; save(); };
-    HW.seg($('ovOnly'), [['all', 'All'], ['bad', 'Problems only']], f.only, function (v) { f.only = v; save(); });
+    var onlySeg = HW.seg($('ovOnly'), [['all', 'All'], ['bad', 'Problems only']], f.only, function (v) { f.only = v; save(); });
     function draw() {
       var st0 = S.status; if (!st0) return;
       var live = f.range === 'live';
@@ -171,10 +171,11 @@
       var med = on.map(function (t) { return t.avg; }).sort(function (a, b) { return a - b; })[on.length >> 1];
       var lossy = st.targets.filter(function (t) { return t.loss > 0; }).length;
       $('kpis').innerHTML =
-        kpi('server', 'Targets', st.targets.length, order.length + ' locations') +
-        kpi('alert', 'Locations with problems', '<span class="' + (bad.length ? 'bad' : 'ok') + '">' + bad.length + '</span>', bad.length ? esc(bad.slice(0, 3).join(', ')) + (bad.length > 3 ? '…' : '') : 'all fine') +
-        kpi('chart', 'Median latency', HW.fnum(med) + '<span class="small muted"> ms</span>', lossy + ' IPs with some loss') +
-        kpi('route', 'MTR runs, 24 h', mtr24 == null ? '…' : mtr24.n, (st.mtr.running.length ? st.mtr.running.length + ' running · ' : '') + (st.mtr.queued.length ? st.mtr.queued.length + ' waiting · ' : '') + (mtr24 ? mtr24.auto + ' automatic' : ''));
+        kpi('server', 'Targets', st.targets.length, order.length + ' locations', '#/settings?tab=targets') +
+        kpi('alert', 'Locations with problems', '<span class="' + (bad.length ? 'bad' : 'ok') + '">' + bad.length + '</span>', bad.length ? esc(bad.slice(0, 3).join(', ')) + (bad.length > 3 ? '…' : '') : 'all fine', '@bad') +
+        kpi('chart', 'Median latency', HW.fnum(med) + '<span class="small muted"> ms</span>', lossy + ' IPs with some loss', '#/charts') +
+        kpi('route', 'MTR runs, 24 h', mtr24 == null ? '…' : mtr24.n, (st.mtr.running.length ? st.mtr.running.length + ' running · ' : '') + (st.mtr.queued.length ? st.mtr.queued.length + ' waiting · ' : '') + (mtr24 ? mtr24.auto + ' automatic' : ''), '#/mtr?tab=runs');
+      onKpi({ bad: function () { f.only = 'bad'; onlySeg.set('bad'); save(); $('tiles').scrollIntoView({ behavior: 'smooth', block: 'start' }); } });
       var q = f.q.toLowerCase();
       var html = order.filter(function (l) {
         if (f.locs.length && f.locs.indexOf(l) < 0) return false;
@@ -244,7 +245,13 @@
   function roleUp(roles, name) { return isEdge(name); }
   /* same rule as the server: a role named ISP / GW / gateway / upstream is the ISP edge */
   function isEdge(name) { return /^(isp|gw|gateway|upstream)/i.test(name || ''); }
-  function kpi(ic, l, v, s) { return '<div class="kpi"><div class="l">' + I(ic) + esc(l) + '</div><div class="v">' + v + '</div><div class="s">' + (s || '') + '</div></div>'; }
+  /* a tile; with go it is a link (a "#/..." address) or an action on this page ("@name", see onKpi) */
+  function kpi(ic, l, v, s, go) {
+    var inner = '<div class="l">' + I(ic) + esc(l) + '</div><div class="v">' + v + '</div><div class="s">' + (s || '') + '</div>';
+    if (!go) return '<div class="kpi">' + inner + '</div>';
+    return go[0] === '@' ? '<button type="button" class="kpi click" data-kpi="' + esc(go.slice(1)) + '">' + inner + '</button>' : '<a class="kpi click" href="' + esc(go) + '">' + inner + '</a>';
+  }
+  function onKpi(acts) { [].forEach.call(document.querySelectorAll('[data-kpi]'), function (b) { b.onclick = function () { if (acts[b.dataset.kpi]) acts[b.dataset.kpi](); }; }); }
 
   /* ------------------------------------------------------------ charts */
   var RANGES = [[900, '15m'], [3600, '1h'], [21600, '6h'], [86400, '24h'], [604800, '7d'], [2592000, '30d'], [7776000, '90d'], [31536000, '1y']];
@@ -556,7 +563,7 @@
     var sel = host ? [host] : [];
     $('main').innerHTML = '<div class="card"><div class="hd"><h2>1 · Time window</h2><span class="sub">pick a preset, or a custom window around the incident</span></div><div class="bd col gap12"><span id="eR"></span><div id="eInc"></div></div></div>' +
       '<div class="card"><div class="hd"><h2>2 · Targets</h2><span class="sub">empty = all targets</span></div><div class="bd"><div id="eT"></div></div></div>' +
-      '<div class="card"><div class="hd"><h2>3 · Note</h2><span class="sub">optional, goes into README.txt (ticket number, what you saw)</span></div><div class="bd"><textarea id="eN" style="min-height:70px" placeholder="e.g. Ticket 12345: users report timeouts to AMS since 09:10 UTC"></textarea></div></div>' +
+      '<div class="card"><div class="hd"><h2>3 · Note</h2><span class="sub">optional, goes into README.txt (ticket number, what you saw)</span></div><div class="bd"><textarea id="eN" style="min-height:70px" placeholder="e.g. Ticket 12345: users report timeouts to DC1 since 09:10 UTC"></textarea></div></div>' +
       '<div class="card"><div class="hd"><h2>4 · Download</h2></div><div class="bd col gap12"><div id="ePrev" class="small muted">…</div><div class="row">' +
       '<button class="btn-p" id="eZip">' + I('box') + 'Evidence pack (.zip)</button><button id="eCsv">' + I('download') + 'Ping data (.csv)</button><button id="eMtr">' + I('route') + 'MTR runs only</button></div>' +
       '<div class="xs muted">The ZIP holds README.txt (summary per target, status changes, MTR list), ping.csv (every ping for short windows, else 1- or 5-minute data), events.csv and every MTR report as .txt and .json. Times are UTC.</div></div></div>';
@@ -660,11 +667,11 @@
         }
         if (tab === 'import') {
           var ro = function (id, cur) { return '<select id="' + id + '"><option value="">–</option>' + (D.roles || []).map(function (r) { return '<option' + (r.name === cur ? ' selected' : '') + '>' + esc(r.name) + '</option>'; }).join('') + '</select>'; };
-          var up = (D.roles || []).filter(function (r) { return isEdge(r.name); })[0], own = (D.roles || []).filter(function (r) { return !isEdge(r.name) && !/^ext/i.test(r.name); })[0],
-            ext = (D.roles || []).filter(function (r) { return /^ext/i.test(r.name); })[0];
+          var up = (D.roles || []).filter(function (r) { return isEdge(r.name); })[0], own = (D.roles || []).filter(function (r) { return !isEdge(r.name) && !/^(ext|public|internet)/i.test(r.name); })[0],
+            ext = (D.roles || []).filter(function (r) { return /^(ext|public|internet)/i.test(r.name); })[0];
           B.innerHTML = card('Targets from Netdata', 'reads the go.d ping jobs: job name = location',
             '<div class="col gap12"><div class="row"><input id="ndU" placeholder="http://netdata-host:19999" style="width:280px" value="' + esc(HW.ls('ndUrl') || '') + '"></div>' +
-            '<div class="form"><div class="field"><label>Jobs ending with</label><input id="ndS" value="' + esc(HW.ls('ndSuf') || 'GW') + '"><span class="hint">e.g. "AMS GW" → location AMS. Empty = keep the job names</span></div>' +
+            '<div class="form"><div class="field"><label>Jobs ending with</label><input id="ndS" value="' + esc(HW.ls('ndSuf') || 'GW') + '"><span class="hint">e.g. "DC1 GW" → location DC1. Empty = keep the job names</span></div>' +
             '<div class="field"><label>… get the role</label>' + ro('ndRS', up ? up.name : '') + '</div><div class="field"><label>Other jobs of those locations get</label>' + ro('ndRO', own ? own.name : '') + '</div>' +
             '<div class="field"><label>Jobs with no such pair get</label>' + ro('ndRL', ext ? ext.name : '') + '<span class="hint">e.g. "Cloudflare DNS": no location, the job name becomes its name</span></div></div>' +
             '<div class="small muted">Roles are set up under Targets → Roles.</div>' + HW.sw('ndUp', true, 'Update targets already in the list', 'their name, location and role change to the imported ones') +
@@ -696,13 +703,13 @@
       function targets() {
         var tf = { q: '', locs: [], roles: [] }, picked = {};
         D.roles = D.roles || [];
-        $('sbody').innerHTML = '<div class="card"><div class="hd"><h2>Roles</h2><span class="sub">groups of targets, e.g. FX, ISP, EXTERNAL; in a location each role is its own group</span><span class="grow"></span><button class="btn-s" id="rAdd">' + I('plus') + 'Add role</button></div>' +
+        $('sbody').innerHTML = '<div class="card"><div class="hd"><h2>Roles</h2><span class="sub">groups of targets, e.g. ISP for the provider\u2019s gateway and Servers for your own; in a location each role is its own group</span><span class="grow"></span><button class="btn-s" id="rAdd">' + I('plus') + 'Add role</button></div>' +
           '<div class="bd"><div id="rList"></div><div class="xs muted mt8">A role that is off pauses all its targets. A role named <b>ISP</b> (or GW, gateway, upstream) is the ISP edge: when it is clean but the other targets of the location lose packets, the problem is past the ISP \u2013 the hub says so.</div></div></div>' +
           '<div class="card"><div class="hd"><h2>Targets</h2><span class="sub" id="tCount"></span><span class="grow"></span>' +
           '<button class="btn-s" id="tAdd">' + I('plus') + 'Add</button><button class="btn-s" id="tPaste">Paste a list…</button></div><div class="bd col gap12">' +
           '<div class="row"><div class="search" style="width:240px">' + I('search') + '<input id="tQ" placeholder="Filter"></div><div id="tL"></div><div id="tR"></div><span class="grow"></span><span id="tBulk" class="row"></span></div>' +
           '<div class="tw" style="max-height:60vh"><table class="table"><thead><tr><th class="w0"><input type="checkbox" id="tAll"></th><th class="w0">On</th><th>Name</th><th>Location</th><th>IP or host name</th><th>Role</th><th class="w0"></th></tr></thead><tbody id="tB"></tbody></table></div>' +
-          '<div class="xs muted">Name and location are optional. IPs with the same location are one tile on the Overview, split by role (AMS · ISP, AMS · FX); IPs without a location are grouped by role. Press Save (top right) to apply.</div></div></div>';
+          '<div class="xs muted">Name and location are optional. IPs with the same location are one tile on the Overview, split by role (DC1 · ISP, DC1 · Servers); IPs without a location are grouped by role. Press Save (top right) to apply.</div></div></div>';
         var roleOpts = function (cur) { return '<option value="">–</option>' + D.roles.map(function (r) { return '<option' + (r.name === cur ? ' selected' : '') + '>' + esc(r.name) + '</option>'; }).join(''); };
         function drawRoles() {
           $('rList').innerHTML = D.roles.length ? '<div class="tw"><table class="table"><thead><tr><th class="w0">On</th><th>Name</th><th class="r">Targets</th><th class="w0"></th></tr></thead><tbody>' + D.roles.map(function (r, i) {
@@ -753,7 +760,7 @@
           var ins = $('tB').querySelectorAll('[data-k=host]'); if (ins.length) ins[ins.length - 1].focus(); };
         $('tPaste').onclick = function () {
           HW.modal('Paste targets', '<p class="small muted">One per line: <code>Name, Location, IP, Role</code>. Use <code>-</code> or leave it empty for no name or no location. <code>Location, IP, Role</code> and only <code>IP</code> work too, and so do tabs and semicolons. Roles that don\u2019t exist yet are created.</p>' +
-            '<textarea id="bulk" placeholder="Cloudflare DNS, -, 1.1.1.1, EXTERNAL&#10;-, AMS, 192.0.2.10, FX&#10;AMS gateway, AMS, 192.0.2.1, ISP&#10;198.51.100.7"></textarea>' +
+            '<textarea id="bulk" placeholder="Cloudflare DNS, -, 1.1.1.1, Public&#10;-, DC1, 192.0.2.10, Servers&#10;DC1 gateway, DC1, 192.0.2.1, ISP&#10;198.51.100.7"></textarea>' +
             '<div class="mt12">' + HW.sw('bUpd', true, 'Update targets already in the list', 'their name, location and role change to what you paste') + '</div>', '<button class="btn-g" id="bx">Cancel</button><button class="btn-p" id="bo">Apply and save</button>');
           $('bx').onclick = HW.closeModal;
           $('bo').onclick = function () {

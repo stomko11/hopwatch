@@ -117,28 +117,29 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(len(c["targets"]), 2)
 
     def test_roles(self):
-        c = config.validate({"roles": [{"name": "FX"}, {"name": "ISP", "upstream": True}],
-                             "targets": [{"location": "AMS", "host": "192.0.2.1", "role": "isp"},
-                                         {"location": "AMS", "host": "192.0.2.2", "role": "gone"}]})
+        c = config.validate({"roles": [{"name": "Servers"}, {"name": "ISP", "upstream": True}],
+                             "targets": [{"location": "DC1", "host": "192.0.2.1", "role": "isp"},
+                                         {"location": "DC1", "host": "192.0.2.2", "role": "gone"}]})
         self.assertEqual([t["role"] for t in c["targets"]], ["ISP", ""])     # case fixed, unknown dropped
         with self.assertRaises(config.ConfigError):
-            config.validate({"roles": [{"name": "FX"}, {"name": "fx"}]})
+            config.validate({"roles": [{"name": "Servers"}, {"name": "servers"}]})
 
     def test_groups(self):
         # location and name are optional; the role is the group when there is no location
-        c = config.validate({"targets": [{"name": "Cloudflare DNS", "host": "1.1.1.1", "role": "EXTERNAL"},
-                                         {"location": "AMS", "host": "192.0.2.1", "role": "ISP"},
-                                         {"location": "AMS", "host": "192.0.2.2", "role": "FX"},
+        c = config.validate({"roles": [{"name": "Servers"}, {"name": "ISP"}, {"name": "Public"}],
+                             "targets": [{"name": "Cloudflare DNS", "host": "1.1.1.1", "role": "Public"},
+                                         {"location": "DC1", "host": "192.0.2.1", "role": "ISP"},
+                                         {"location": "DC1", "host": "192.0.2.2", "role": "Servers"},
                                          {"host": "192.0.2.3"}]})
         t = c["targets"]
         self.assertEqual(t[0]["location"], "")
-        self.assertEqual([config.group(x) for x in t], ["EXTERNAL", "AMS · ISP", "AMS · FX", "192.0.2.3"])
-        self.assertEqual([config.place(x) for x in t], ["EXTERNAL", "AMS", "AMS", "192.0.2.3"])
-        self.assertEqual(config.label(t[0]), "Cloudflare DNS (EXTERNAL)")
-        self.assertEqual([r["name"] for r in config.validate({})["roles"]], ["FX", "ISP", "EXTERNAL"])
-        c = config.validate({"roles": [{"name": "FX", "enabled": False}, {"name": "ISP"}],
-                             "targets": [{"location": "AMS", "host": "192.0.2.1", "role": "FX"},
-                                         {"location": "AMS", "host": "192.0.2.2", "role": "ISP"}]})
+        self.assertEqual([config.group(x) for x in t], ["Public", "DC1 · ISP", "DC1 · Servers", "192.0.2.3"])
+        self.assertEqual([config.place(x) for x in t], ["Public", "DC1", "DC1", "192.0.2.3"])
+        self.assertEqual(config.label(t[0]), "Cloudflare DNS (Public)")
+        self.assertEqual(config.validate({})["roles"], [])
+        c = config.validate({"roles": [{"name": "Servers", "enabled": False}, {"name": "ISP"}],
+                             "targets": [{"location": "DC1", "host": "192.0.2.1", "role": "Servers"},
+                                         {"location": "DC1", "host": "192.0.2.2", "role": "ISP"}]})
         self.assertEqual([config.active(t, c) for t in c["targets"]], [False, True])     # role off pauses its targets
         self.assertEqual([r["upstream"] for r in c["roles"]], [False, True])              # ISP edge from the name
 
@@ -293,14 +294,14 @@ if __name__ == "__main__":
 
 
 class ImportTest(unittest.TestCase):
-    """Netdata jobs: "AMS GW" -> location AMS, role ISP; "AMS" -> AMS, FX; "Cloudflare DNS" -> no location, EXTERNAL."""
+    """Netdata jobs: "DC1 GW" -> location DC1, role ISP; "DC1" -> DC1, Servers; "Cloudflare DNS" -> no location, Public."""
     def test_pairs(self):
         import web, netdata_import
-        found = [{"location": "AMS GW", "host": "192.0.2.1"}, {"location": "AMS", "host": "192.0.2.2"},
+        found = [{"location": "DC1 GW", "host": "192.0.2.1"}, {"location": "DC1", "host": "192.0.2.2"},
                  {"location": "Cloudflare DNS", "host": "1.1.1.1"}]
         class H:
             def _body(self):
-                return {"suffix": "GW", "suffix_role": "ISP", "other_role": "FX", "lone_role": "EXTERNAL"}
+                return {"suffix": "GW", "suffix_role": "ISP", "other_role": "Servers", "lone_role": "Public"}
         old = netdata_import.targets
         netdata_import.targets = lambda url: found
         try:
@@ -308,15 +309,15 @@ class ImportTest(unittest.TestCase):
         finally:
             netdata_import.targets = old
         self.assertEqual([(t["name"], t["location"], t["role"]) for t in out],
-                         [("", "AMS", "ISP"), ("", "AMS", "FX"), ("Cloudflare DNS", "", "EXTERNAL")])
+                         [("", "DC1", "ISP"), ("", "DC1", "Servers"), ("Cloudflare DNS", "", "Public")])
 
 
 class SeriesAggTest(unittest.TestCase):
     """group=role&agg=worst: a location's loss is its worst IP, not the average of its IPs."""
     def test_worst(self):
         import web
-        c = config.validate({"targets": [{"location": "BUL", "host": "192.0.2.1", "role": "FX"},
-                                         {"location": "BUL", "host": "192.0.2.2", "role": "FX"}]})
+        c = config.validate({"targets": [{"location": "DC2", "host": "192.0.2.1", "role": "Servers"},
+                                         {"location": "DC2", "host": "192.0.2.2", "role": "Servers"}]})
         acc = lambda loss: {"sent": 100, "lost": loss, "loss": float(loss), "avg": 10.0, "jitter": 1.0, "max": 12.0}
 
         class A:

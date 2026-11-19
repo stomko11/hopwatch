@@ -106,7 +106,7 @@ def align(per_probe):
             continue
         for s in d["series"]:
             h = s["host"]
-            # a role keeps its own name everywhere: "AMS · ISP" and "AMS · FX" are separate
+            # a role keeps its own name everywhere: "DC1 · ISP" and "DC1 · Servers" are separate
             # (probes before 0.2.5 send no "group")
             locs.setdefault(h, s.get("group") or (s["location"] + (" · " + s["role"] if s.get("role") else "")))
             dst = grid.setdefault(h, {}).setdefault(pid, {})

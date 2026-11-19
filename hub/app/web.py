@@ -205,7 +205,7 @@ def api_overview(h, q, _):
     rows = {}
     for hst, by in grid.items():
         loc = locs[hst]
-        r = rows.setdefault(loc, {"location": loc, "hosts": [], "by": {}})   # "AMS · ISP" when the target has a role
+        r = rows.setdefault(loc, {"location": loc, "hosts": [], "by": {}})   # "DC1 · ISP" when the target has a role
         r["hosts"].append(hst)
         for p, pts in by.items():
             b = r["by"].setdefault(p, {"avg": [], "loss": [], "jit": []})

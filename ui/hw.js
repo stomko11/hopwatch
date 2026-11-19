@@ -589,7 +589,7 @@
       var tip = FR ? ' title="Comma = or. Numbers: >5 <=20 5..20 !=0 · Times: >14:00, 14:00..15:30, >2026-11-18, 18.11.2026, >-2h · Text: contains, =exact, !not, ^starts, ends$"' : '';
       var filt = el._showF && (!FR || narrow) ? '<div class="form" style="margin-bottom:8px">' + V.map(function (c) { return '<div class="field"><label>' + esc(c.label) + '</label><input data-f="' + c.key + '" value="' + esc(el._tf[c.key] || '') + '" placeholder="' + esc(ph(c)) + '"' + tip + '></div>'; }).join('') + '</div>' : '';
       var body;
-      if (!L.length) body = '<div class="empty">' + (o.empty || 'Nothing here.') + '</div>';
+      if (!L.length && !(FR && o.rows.length && !narrow)) body = '<div class="empty">' + (o.rows.length ? 'Nothing matches the search or the filters.' : (o.empty || 'Nothing here.')) + '</div>';
       else if (narrow) body = '<div class="tcards">' + L.map(function (r, i) {
         return '<div class="tcard' + (o.onRow ? ' click' : '') + (sel && sel[o.rowKey(r)] ? ' sel' : '') + '" data-i="' + i + '">' + (sel ? '<input type="checkbox" data-s="' + esc(o.rowKey(r)) + '"' + (sel[o.rowKey(r)] ? ' checked' : '') + '>' : '') +
           '<dl>' + V.map(function (c) { return '<dt>' + esc(c.label) + '</dt><dd>' + (c.html ? c.html(r) : esc(txt(c, r))) + '</dd>'; }).join('') + '</dl></div>'; }).join('') + '</div>';
@@ -597,7 +597,7 @@
         V.map(function (c) { return '<th class="srt' + (c.align === 'r' ? ' r' : '') + '" data-k="' + c.key + '"' + (c.minw ? ' style="min-width:' + c.minw + 'px"' : '') + '>' + esc(c.label) + (st.sort === c.key ? (st.dir > 0 ? ' ▲' : ' ▼') : '') + '</th>'; }).join('') + '</tr>' +
         (FR ? '<tr class="fr">' + (sel ? '<th class="w0"></th>' : '') + V.map(function (c) { return '<th><input data-f="' + c.key + '" value="' + esc(el._tf[c.key] || '') + '" placeholder="' + esc(ph(c)) + '"' + tip + ' class="' + (el._tf[c.key] ? 'on' : '') + '"></th>'; }).join('') + '</tr>' : '') + '</thead><tbody>' +
         L.map(function (r, i) { return '<tr data-i="' + i + '" class="' + (o.onRow ? 'click' : '') + (sel && sel[o.rowKey(r)] ? ' sel' : '') + (o.rowClass ? ' ' + o.rowClass(r) : '') + '">' + (sel ? '<td class="w0"><input type="checkbox" data-s="' + esc(o.rowKey(r)) + '"' + (sel[o.rowKey(r)] ? ' checked' : '') + '></td>' : '') +
-          V.map(function (c) { return '<td' + (c.align === 'r' ? ' class="r"' : c.nowrap ? ' class="w0"' : '') + '>' + (c.html ? c.html(r) : esc(txt(c, r))) + '</td>'; }).join('') + '</tr>'; }).join('') + '</tbody></table></div>';
+          V.map(function (c) { return '<td' + (c.align === 'r' ? ' class="r"' : c.nowrap ? ' class="w0"' : '') + '>' + (c.html ? c.html(r) : esc(txt(c, r))) + '</td>'; }).join('') + '</tr>'; }).join('') + '' + (L.length ? '' : '<tr><td colspan="' + (V.length + (sel ? 1 : 0)) + '" class="empty">Nothing matches the search or the filters.</td></tr>') + '</tbody></table></div>';
       var ae = document.activeElement, fk = ae && el.contains(ae) && ae.dataset ? (ae.dataset.q != null ? '__q' : ae.dataset.f) : null, pos = fk ? ae.selectionStart : 0;
       var sx = el.querySelector('.tw') ? el.querySelector('.tw').scrollLeft : 0;
       el.innerHTML = bar + filt + body;

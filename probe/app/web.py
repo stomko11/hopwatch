@@ -79,7 +79,7 @@ def api_series(h, q, _):
     worst = q.get("agg") == "worst"    # a group as its worst IP per moment (what the hub correlates) instead of the average
     out = []
     if group in ("location", "role"):
-        # "role" keeps the roles of a location apart: "AMS · ISP" and "AMS · FX" are never averaged together
+        # "role" keeps the roles of a location apart: "DC1 · ISP" and "DC1 · Servers" are never averaged together
         locs, meta = {}, {}
         for t in targets:
             key = _place(t) if group == "location" else _group(t)
@@ -255,7 +255,7 @@ def api_tcpcheck(h, q, _):
 
 def api_import_targets(h, q, _):
     """Targets of a Netdata agent. Optional: jobs whose name ends with `suffix` (e.g. "GW") get
-    `suffix_role` and lose the suffix, so "AMS GW" becomes location "AMS" with role "ISP"; the
+    `suffix_role` and lose the suffix, so "DC1 GW" becomes location "DC1" with role "ISP"; the
     jobs of those locations get `other_role`. A job with no such pair (e.g. "Cloudflare DNS") is
     not in a location: the job name becomes the target's name and it gets `lone_role`."""
     b = h._body()

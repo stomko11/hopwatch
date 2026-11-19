@@ -10,20 +10,20 @@ import os
 import re
 import threading
 
-VERSION = "0.2.11"
+VERSION = "0.2.12"
 
 DEFAULTS = {
     "site_name": "",
     "targets": [
-        {"name": "Cloudflare DNS", "location": "", "host": "1.1.1.1", "enabled": True, "role": "EXTERNAL"},
-        {"name": "Google DNS", "location": "", "host": "8.8.8.8", "enabled": True, "role": "EXTERNAL"},
+        {"name": "Cloudflare DNS", "location": "", "host": "1.1.1.1", "enabled": True, "role": ""},
+        {"name": "Google DNS", "location": "", "host": "8.8.8.8", "enabled": True, "role": ""},
     ],
     # A target has an optional name, an optional location (the DC it is in) and a role (its group).
-    # Within a location the roles stay apart: "AMS · ISP" and "AMS · FX". Without a location the
+    # Within a location the roles stay apart: "DC1 · ISP" and "DC1 · Servers". Without a location the
     # role alone is the group. A role turned off pauses all its targets. A role named ISP (or GW,
     # gateway, upstream) is the ISP edge: when it is clean and the others of the location are not,
     # the problem is past the ISP.
-    "roles": [{"name": "FX", "enabled": True}, {"name": "ISP", "enabled": True}, {"name": "EXTERNAL", "enabled": True}],
+    "roles": [],
     "ping": {"interval_ms": 1000, "timeout_ms": 1000, "size": 56},
     "alerts": {"window_s": 60, "loss_warn": 5, "loss_crit": 20, "rtt_warn_ms": 0, "rtt_crit_ms": 0},
     # Automatic MTR: when something goes wrong (and once more when it is fixed), so there is evidence
@@ -119,7 +119,7 @@ def place(t) -> str:
 
 
 def group(t) -> str:
-    """Its group: "AMS · ISP" when it has a location and a role, else the place."""
+    """Its group: "DC1 · ISP" when it has a location and a role, else the place."""
     return f'{t["location"]} · {t["role"]}' if t.get("location") and t.get("role") else place(t)
 
 

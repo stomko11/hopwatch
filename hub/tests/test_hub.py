@@ -70,19 +70,19 @@ class CorrelateTest(unittest.TestCase):
 
 class RoleTest(unittest.TestCase):
     def test_roles_are_separate_locations(self):
-        d = {"a": {"step": 60, "series": [{"host": "h1", "location": "AMS", "role": "Own", "points": pts(0, 60, [30])},
-                                          {"host": "h2", "location": "AMS", "role": "ISP", "points": pts(0, 60, [0])}]},
-             "b": {"step": 60, "series": [{"host": "h1", "location": "AMS", "role": "Own", "points": pts(0, 60, [30])},
-                                          {"host": "h2", "location": "AMS", "role": "ISP", "points": pts(0, 60, [0])}]}}
+        d = {"a": {"step": 60, "series": [{"host": "h1", "location": "DC1", "role": "Own", "points": pts(0, 60, [30])},
+                                          {"host": "h2", "location": "DC1", "role": "ISP", "points": pts(0, 60, [0])}]},
+             "b": {"step": 60, "series": [{"host": "h1", "location": "DC1", "role": "Own", "points": pts(0, 60, [30])},
+                                          {"host": "h2", "location": "DC1", "role": "ISP", "points": pts(0, 60, [0])}]}}
         r = hub.correlate(d, {}, {"loss": 1, "jitter": None, "delay": None}, 2)
-        self.assertEqual([i["location"] for i in r["incidents"]], ["AMS · Own"])
+        self.assertEqual([i["location"] for i in r["incidents"]], ["DC1 · Own"])
 
     def test_group_from_probe(self):
         # 0.2.5 probes send the group: a target without a location is grouped by its role
-        s = {"host": "1.1.1.1", "location": "EXTERNAL", "role": "EXTERNAL", "group": "EXTERNAL", "points": pts(0, 60, [30])}
+        s = {"host": "1.1.1.1", "location": "Public", "role": "Public", "group": "Public", "points": pts(0, 60, [30])}
         d = {"a": {"step": 60, "series": [s]}, "b": {"step": 60, "series": [dict(s)]}}
         r = hub.correlate(d, {}, {"loss": 1, "jitter": None, "delay": None}, 2)
-        self.assertEqual([i["location"] for i in r["incidents"]], ["EXTERNAL"])
+        self.assertEqual([i["location"] for i in r["incidents"]], ["Public"])
 
     def test_sites_needed(self):
         self.assertEqual(hub.sites_needed(0, 3), 3)       # all
@@ -213,3 +213,10 @@ class SyncTest(unittest.TestCase):
         self.assertEqual(put["b"]["targets"], [{"host": "h2"}])           # not chosen: kept
         self.assertEqual(put["b"]["site_name"], "B")
         self.assertNotIn("security", put["b"])                            # the probe keeps its own
+
+
+class MigrateTest(unittest.TestCase):
+    def test_old_default_follows_probes(self):
+        self.assertEqual(config.validate({"correlate": {"min_sites": 2}})["correlate"]["min_sites"], 0)     # old file
+        self.assertEqual(config.validate({"schema": 2, "correlate": {"min_sites": 2}})["correlate"]["min_sites"], 2)
+        self.assertEqual(config.validate({"correlate": {"min_sites": 3}})["correlate"]["min_sites"], 3)

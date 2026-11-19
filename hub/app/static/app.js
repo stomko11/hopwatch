@@ -89,7 +89,13 @@
   }
   function splitSel(v) { return { hosts: v.filter(function (x) { return x.indexOf('loc:') !== 0; }), locs: v.filter(function (x) { return x.indexOf('loc:') === 0; }).map(function (x) { return x.slice(4); }) }; }
   function selQ(v) { var s = splitSel(v); return (s.hosts.length ? '&host=' + encodeURIComponent(s.hosts.join(',')) : '') + (s.locs.length ? '&location=' + encodeURIComponent(s.locs.join(',')) : ''); }
-  function kpi(ic, l, v, s) { return '<div class="kpi"><div class="l">' + I(ic) + esc(l) + '</div><div class="v">' + v + '</div><div class="s">' + (s || '') + '</div></div>'; }
+  /* a tile; with go it is a link (a "#/..." address) or an action on this page ("@name", see onKpi) */
+  function kpi(ic, l, v, s, go) {
+    var inner = '<div class="l">' + I(ic) + esc(l) + '</div><div class="v">' + v + '</div><div class="s">' + (s || '') + '</div>';
+    if (!go) return '<div class="kpi">' + inner + '</div>';
+    return go[0] === '@' ? '<button type="button" class="kpi click" data-kpi="' + esc(go.slice(1)) + '">' + inner + '</button>' : '<a class="kpi click" href="' + esc(go) + '">' + inner + '</a>';
+  }
+  function onKpi(acts) { [].forEach.call(document.querySelectorAll('[data-kpi]'), function (b) { b.onclick = function () { if (acts[b.dataset.kpi]) acts[b.dataset.kpi](); }; }); }
 
   /* run MTR from several probes */
   function mtrDialog(hosts) {
@@ -133,7 +139,7 @@
       '<div class="mt12 small muted">How many IPs had problems · red = several sites, amber = one site only, purple = one site\u2019s own link</div><div id="ms"></div></div></div>' +
       '<div class="card"><div class="hd"><h2>Locations</h2><span class="sub" id="ovSub"></span></div><div class="bd col gap12"><div class="row"><div class="search" style="width:240px">' + I('search') + '<input id="ovQ" placeholder="Filter" value="' + esc(f.q) + '"></div><span id="ovOnly"></span><div id="ovL"></div></div><div id="mx"></div></div></div>';
     $('ovQ').oninput = function () { f.q = this.value.toLowerCase(); HW.ls('hovf', f); draw(); };
-    HW.seg($('ovOnly'), [['bad', 'As in the chart'], ['all', 'All locations']], f.only, function (v) { f.only = v; HW.ls('hovf', f); draw(); });
+    var onlySeg = HW.seg($('ovOnly'), [['bad', 'As in the chart'], ['all', 'All locations']], f.only, function (v) { f.only = v; HW.ls('hovf', f); draw(); });
     var rp = HW.rangePicker($('ovR'), [['live', 'Live'], [900, '15m'], [3600, '1h'], [10800, '3h'], [21600, '6h'], [86400, '24h'], [604800, '7d']],
       f.win || { range: 'live' }, function (w) { f.win = w.range ? { range: w.range } : { from: w.from, to: w.to }; HW.ls('hovf', f); ov = null; loadOv(); draw(); });
     HW.seg($('ovS'), SIGS.map(function (x) { return [x[0], x[1]]; }), f.sig, function (v) { f.sig = v; HW.ls('hovf', f); hidden = {}; charts(); draw(); });
@@ -251,10 +257,11 @@
       order.forEach(function (x) { var v = verdictAll(locs[x]); if (v[0] === 'bad') multi++; else if (v[0] === 'warn') single++; });
       var online = ps.filter(function (p) { return !p.error || p.targets; });
       var running = ps.reduce(function (a, p) { return a + (p.mtr ? p.mtr.running.length : 0); }, 0), rl = live ? 'now' : 'in the chosen window';
-      $('kpis').innerHTML = kpi('server', 'Probes online', '<span class="' + (online.length < ps.length ? 'warn' : 'ok') + '">' + online.length + '</span><span class="small muted"> / ' + ps.length + '</span>', ps.filter(function (p) { return p.error && !p.targets; }).map(function (p) { return esc(p.name) + ' offline'; }).join(', ') || 'all answering') +
-        kpi('alert', 'Seen from several sites', '<span class="' + (multi ? 'bad' : 'ok') + '">' + multi + '</span>', 'locations ' + rl + ', likely the target side') +
-        kpi('info', 'Seen from one site only', '<span class="' + (single ? 'warn' : 'ok') + '">' + single + '</span>', 'locations ' + rl + ', likely that site\u2019s path') +
-        kpi('route', 'MTR running', running, 'on all probes');
+      $('kpis').innerHTML = kpi('server', 'Probes online', '<span class="' + (online.length < ps.length ? 'warn' : 'ok') + '">' + online.length + '</span><span class="small muted"> / ' + ps.length + '</span>', ps.filter(function (p) { return p.error && !p.targets; }).map(function (p) { return esc(p.name) + ' offline'; }).join(', ') || 'all answering', '#/settings?tab=probes') +
+        kpi('alert', 'Seen from several sites', '<span class="' + (multi ? 'bad' : 'ok') + '">' + multi + '</span>', 'locations ' + rl + ', likely the target side', '@several') +
+        kpi('info', 'Seen from one site only', '<span class="' + (single ? 'warn' : 'ok') + '">' + single + '</span>', 'locations ' + rl + ', likely that site\u2019s path', '#/incidents?kind=path,site') +
+        kpi('route', 'MTR running', running, 'on all probes', '#/mtr?status=' + encodeURIComponent('=running,=queued'));
+      onKpi({ several: function () { f.view = 'common'; f.only = 'bad'; HW.ls('hovf', f); onlySeg.set('bad'); viewSeg(); charts(); draw(); $('mx').scrollIntoView({ behavior: 'smooth', block: 'start' }); } });
       $('pstrip').innerHTML = ps.map(function (p) { var bad = (p.targets || []).filter(function (t) { return RANK[t.status] >= 2; }).length;
         return '<span class="pill ' + (p.error && !p.targets ? 'bad' : bad ? 'warn' : 'ok') + '" title="' + esc(p.error || p.url) + '">' + I('server') + esc(p.name) + (p.targets ? ' · ' + p.targets.length + ' targets' + (bad ? ' · ' + bad + ' with problems now' : '') : ' · ' + esc(p.error || 'offline')) + '</span>'; }).join('');
       var rows = order.filter(function (x) { var L = locs[x];
@@ -304,9 +311,10 @@
     head('Incidents', 'What several sites see at the same time, and what only one site sees');
     var f = HW.lsj('hinc', { range: 86400, kinds: [], locs: [], probes: [], sig: [] });
     if (qs('loc')) f.locs = [qs('loc')];
+    if (qs('kind')) f.kinds = qs('kind').split(',');
     live().then(function (l) {
       var c = l.correlate;
-      var th = HW.lsj('hth', { min: c.min_sites, uL: c.use_loss, L: c.loss, uJ: c.use_jitter, J: c.jitter, uD: c.use_delay, D: c.delay });
+      var th = HW.lsj('hth2', { min: c.min_sites, uL: c.use_loss, L: c.loss, uJ: c.use_jitter, J: c.jitter, uD: c.use_delay, D: c.delay });
       $('main').innerHTML = '<div class="card"><div class="bd col gap12"><div class="row gap12"><span id="iR"></span><div id="iP"></div><div id="iL"></div><div id="iK"></div><div id="iS"></div></div>' +
         '<div class="row gap12"><label class="row gap4 small"><b>Seen from</b><select id="tMin"><option value="0"' + (+th.min === 0 ? ' selected' : '') + '>all sites</option>' + l.probes.map(function (p, i) { return i ? '<option value="' + (i + 1) + '"' + (+th.min === i + 1 ? ' selected' : '') + '>at least ' + (i + 1) + '</option>' : ''; }).join('') + '<option value="1"' + (+th.min === 1 ? ' selected' : '') + '>any one site</option></select></label>' +
         '<label class="row gap4 small"><input type="checkbox" id="tuL"' + (th.uL ? ' checked' : '') + '>loss &gt;<input type="number" id="tL" value="' + th.L + '" style="width:70px">%</label>' +
@@ -321,7 +329,7 @@
       HW.ms($('iK'), { options: Object.keys(KIND).map(function (k) { return { value: k, label: KIND[k][0] }; }), value: f.kinds, label: 'Kind', onChange: function (v) { f.kinds = v; HW.ls('hinc', f); draw(); } });
       HW.ms($('iS'), { options: Object.keys(SIG).map(function (k) { return { value: k, label: SIG[k] }; }), value: f.sig, label: 'Signal', onChange: function (v) { f.sig = v; HW.ls('hinc', f); draw(); } });
       ['tMin', 'tuL', 'tL', 'tuJ', 'tJ', 'tuD', 'tD'].forEach(function (id) { $(id).addEventListener('change', function () {
-        th = { min: +$('tMin').value, uL: $('tuL').checked, L: +$('tL').value, uJ: $('tuJ').checked, J: +$('tJ').value, uD: $('tuD').checked, D: +$('tD').value }; HW.ls('hth', th); load(); }); });
+        th = { min: +$('tMin').value, uL: $('tuL').checked, L: +$('tL').value, uJ: $('tuJ').checked, J: +$('tJ').value, uD: $('tuD').checked, D: +$('tD').value }; HW.ls('hth2', th); load(); }); });
       var last = null, tbl = null;
       $('tDur').oninput = function () { f.dur = +this.value || 0; HW.ls('hinc', f); draw(); };
       $('iEv').onclick = function () { var w = rp.get(); location.hash = '#/evidence?from=' + Math.floor(w.from) + '&to=' + Math.ceil(w.to); };
@@ -382,7 +390,7 @@
       var rp = HW.rangePicker($('cR'), [[3600, '1h'], [21600, '6h'], [86400, '24h'], [604800, '7d'], [2592000, '30d']], qs('from') ? { from: +qs('from'), to: +qs('to') } : { range: f.range }, function (w) { if (w.range) f.range = w.range; HW.ls('hcmp', f); load(); });
       HW.ms($('cT'), { options: targetOpts(l, true), value: f.sel, label: 'Show', placeholder: 'pick…', onChange: function (v) { f.sel = v; HW.ls('hcmp', f); load(); } });
       HW.ms($('cP'), { options: probeOpts(l), value: f.probes, label: 'Sites', onChange: function (v) { f.probes = v; HW.ls('hcmp', f); load(); } });
-      // per location = like the Overview: roles apart (BUL · FX, BUL · ISP) and the worst IP at each moment
+      // per location = like the Overview: roles apart (DC2 · Servers, DC2 · ISP) and the worst IP at each moment
       HW.seg($('cG'), [['role', 'Per location (worst IP)'], ['host', 'Per IP']], f.group, function (v) { f.group = v; HW.ls('hcmp', f); load(); });
       var hidden = { rtt: {}, loss: {}, jit: {} }, pin = null;
       function load() {
@@ -421,6 +429,7 @@
       // filtering is in the table: a search box and a filter under every column (links preset the target)
       var tbl = null;
       if (qs('host')) $('rL')._tf = { host: '=' + qs('host') };
+      if (qs('status')) $('rL')._tf = Object.assign($('rL')._tf || {}, { status: qs('status') });
       function load() {
         var w = rp.get();
         api('/api/mtr?limit=2000&from=' + Math.floor(w.from) + '&to=' + Math.ceil(w.to)).then(function (r) {
@@ -530,7 +539,7 @@
       if (tab === 'correlate') {
         var k = cfg.correlate;
         $('sb').innerHTML = '<div class="card"><div class="hd"><h2>Correlation defaults</h2><span class="sub">what counts as a problem, and when it is the target\u2019s side</span></div><div class="bd col gap12">' +
-          '<div class="form"><div class="field"><label>Seen from</label><select id="cK"><option value="0"' + (!k.min_sites ? ' selected' : '') + '>All sites that answer</option>' + [1, 2, 3, 4, 5, 6, 8, 10].map(function (n) { return '<option value="' + n + '"' + (k.min_sites === n ? ' selected' : '') + '>at least ' + n + '</option>'; }).join('') + '</select><span class="hint">A problem this many sites see at the same moment is put on the target\u2019s side. Sites that don\u2019t answer are not counted.</span></div>' +
+          '<div class="form"><div class="field"><label>Seen from</label><select id="cK"><option value="0"' + (!k.min_sites ? ' selected' : '') + '>All sites that answer (now ' + cfg.probes.filter(function (p) { return p.enabled; }).length + ')</option>' + (function () { var n = cfg.probes.filter(function (p) { return p.enabled; }).length, a = []; for (var i = 1; i < Math.max(n, 2); i++) a.push(i); if (k.min_sites && a.indexOf(k.min_sites) < 0) a.push(k.min_sites); return a; })().map(function (n) { return '<option value="' + n + '"' + (k.min_sites === n ? ' selected' : '') + '>at least ' + n + '</option>'; }).join('') + '</select><span class="hint">A problem this many sites see at the same moment is put on the target\u2019s side. Sites that don\u2019t answer are not counted.</span></div>' +
           '<div class="field"><label>Site link when (% of its targets)</label><input type="number" id="cS" min="1" max="100" value="' + k.site_share + '"><span class="hint">One site with loss on this share of its targets at once: its own uplink</span></div></div>' +
           HW.sw('cuL', k.use_loss, 'Packet loss', '') + '<div class="form"><div class="field"><label>Loss over (%)</label><input type="number" id="cL" value="' + k.loss + '"></div></div>' +
           HW.sw('cuJ', k.use_jitter, 'Jitter', '') + '<div class="form"><div class="field"><label>Jitter over (ms)</label><input type="number" id="cJ" value="' + k.jitter + '"></div></div>' +
@@ -546,7 +555,7 @@
           $('xLog').innerHTML = '<div class="small muted" style="margin-bottom:6px">Latest</div>' + (x.log.length ? '<div class="tw"><table class="table"><thead><tr><th>When</th><th>Target</th><th>Problem seen by</th><th>Other sites</th></tr></thead><tbody>' + x.log.map(function (e) {
             return '<tr><td class="small">' + HW.fdt(e.t) + '</td><td class="mono small">' + esc(e.host) + '</td><td>' + esc(e.from) + '</td><td class="small">' + (e.note ? '<span class="warn">' + esc(e.note) + '</span>' : e.results.map(function (r) { return '<b>' + esc(r[0]) + '</b>: ' + esc(r[1] || ''); }).join(' · ')) + '</td></tr>'; }).join('') + '</tbody></table></div>'
             : '<div class="small muted">Nothing yet since the hub started.</div>'); }).catch(function () { /* optional */ });
-        $('cSave').onclick = function () { cfg.correlate = { min_sites: +$('cK').value, site_share: +$('cS').value, use_loss: $('cuL').checked, loss: +$('cL').value, use_jitter: $('cuJ').checked, jitter: +$('cJ').value, use_delay: $('cuD').checked, delay: +$('cD').value }; try { localStorage.removeItem('hw_hth'); } catch (e) { /* private mode */ } save(cfg); };
+        $('cSave').onclick = function () { cfg.correlate = { min_sites: +$('cK').value, site_share: +$('cS').value, use_loss: $('cuL').checked, loss: +$('cL').value, use_jitter: $('cuJ').checked, jitter: +$('cJ').value, use_delay: $('cuD').checked, delay: +$('cD').value }; try { localStorage.removeItem('hw_hth2'); } catch (e) { /* private mode */ } save(cfg); };
       }
       if (tab === 'sync') {
         $('sb').innerHTML = '<div class="card"><div class="hd"><h2>Same settings on every probe</h2><span class="sub">pick the probe that is right, see where the others differ, copy</span></div><div class="bd col gap12" id="syB"><div class="small muted">Reading the probes…</div></div></div>' +

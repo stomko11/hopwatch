@@ -6,7 +6,7 @@ import re
 import secrets
 import threading
 
-VERSION = "0.2.11"
+VERSION = "0.2.12"
 
 DEFAULTS = {
     "name": "Hopwatch Hub",
@@ -36,8 +36,15 @@ def _merge(base, over):
     return out
 
 
+SCHEMA = 2      # 2: min_sites 0 = all sites (before, 2 was the default and was written into every file)
+
+
 def validate(cfg: dict) -> dict:
+    cfg = dict(cfg or {})
+    if cfg and int(cfg.get("schema") or 1) < 2 and (cfg.get("correlate") or {}).get("min_sites") == 2:
+        cfg["correlate"] = {**cfg["correlate"], "min_sites": 0}     # the old default: follow the number of probes
     c = _merge(DEFAULTS, cfg)
+    c["schema"] = SCHEMA
     c["name"] = str(c.get("name") or "Hopwatch Hub").strip()[:60]
     c["local_name"] = str(c.get("local_name") or "").strip()[:40]
     k = c["correlate"]
@@ -143,6 +150,7 @@ class Config:
             for p in new.get("probes") or []:
                 if not p.get("token") and p.get("id") in old_tok:
                     p["token"] = old_tok[p["id"]]
+            new["schema"] = SCHEMA        # a value chosen in the UI is never taken for the old default
             self.data = validate(new)
             self._write()
             out = copy.deepcopy(self.data)
