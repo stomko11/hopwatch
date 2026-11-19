@@ -28,9 +28,7 @@
   function nav() {
     $('nav').innerHTML = NAV.map(function (n) { return '<a href="#/' + n[0] + '" class="' + (S.view === n[0] ? 'on' : '') + '">' + I(n[1]) + '<span class="lbl">' + n[2] + '</span></a>'; }).join('');
     $('loginBtn').innerHTML = admin() ? I('out') + 'Log out' : S.info && !S.info.auth.password_set ? I('lock') + 'Set password' : I('lock') + 'Log in';
-    var th = HW.ls('theme') || 'auto';
-    $('themeBtn').innerHTML = th === 'auto' ? '<span class="xs" style="font-weight:700">A</span>' : I(th === 'light' ? 'sun' : 'moon');
-    $('themeBtn').title = 'Theme: ' + { auto: 'auto (follows the system)', dark: 'dark', light: 'light' }[th] + ' – click to change';
+    if (S.thSeg) S.thSeg.set(HW.ls('theme') || 'auto');
     $('prefsBtn').innerHTML = I('more');
   }
   function loadInfo() { return api('/api/info').then(function (i) { S.info = i; $('site').textContent = i.site; document.title = i.site; nav(); return i; }); }
@@ -55,8 +53,7 @@
     HW.prefs(this, { login: $('loginBtn').innerHTML, onLogin: function () { $('loginBtn').click(); },
       onChange: function () { HW.seg($('tzSeg'), HW.TZ, HW.tz, function (v) { HW.tz = v; HW.ls('tz', v); route(); }); route(); } });
   };
-  $('themeBtn').onclick = function () { var order = ['auto', 'dark', 'light'], cur = HW.ls('theme') || 'auto';
-    var nxt = order[(order.indexOf(cur) + 1) % 3]; HW.theme(nxt); HW.toast('Theme: ' + { auto: 'follows the system', dark: 'dark', light: 'light' }[nxt]); route(); };
+  S.thSeg = HW.themeSeg($('themeSeg'), function () { route(); });
   HW.onTheme = function () { route(); };
   $('loginBtn').onclick = function () {
     if (admin()) api('/api/logout', { method: 'POST' }).then(function () { loadInfo().then(route); });
@@ -512,7 +509,7 @@
     head('Settings', '', '');
     Promise.all([api('/api/config'), api('/api/live').catch(function () { return { probes: [] }; })]).then(function (r) {
       var cfg = r[0], lv = {}; r[1].probes.forEach(function (p) { lv[p.id] = p; });
-      var tabs = [['probes', 'Probes'], ['correlate', 'Correlation'], ['security', 'Security']];
+      var tabs = [['probes', 'Probes'], ['sync', 'Probe settings'], ['correlate', 'Correlation'], ['security', 'Security']];
       if (!tabs.some(function (t) { return t[0] === tab; })) tab = tabs[0][0];
       $('main').innerHTML = '<div class="tabs" id="st">' + tabs.map(function (t) { return '<button data-t="' + t[0] + '" class="' + (t[0] === tab ? 'on' : '') + '">' + t[1] + '</button>'; }).join('') + '</div><div id="sb" class="col gap12"></div>';
       $('st').onclick = function (e) { var b = e.target.closest('button'); if (b) { HW.ls('hsTab', b.dataset.t); location.hash = '#/settings?tab=' + b.dataset.t; } };
@@ -550,6 +547,83 @@
             return '<tr><td class="small">' + HW.fdt(e.t) + '</td><td class="mono small">' + esc(e.host) + '</td><td>' + esc(e.from) + '</td><td class="small">' + (e.note ? '<span class="warn">' + esc(e.note) + '</span>' : e.results.map(function (r) { return '<b>' + esc(r[0]) + '</b>: ' + esc(r[1] || ''); }).join(' · ')) + '</td></tr>'; }).join('') + '</tbody></table></div>'
             : '<div class="small muted">Nothing yet since the hub started.</div>'); }).catch(function () { /* optional */ });
         $('cSave').onclick = function () { cfg.correlate = { min_sites: +$('cK').value, site_share: +$('cS').value, use_loss: $('cuL').checked, loss: +$('cL').value, use_jitter: $('cuJ').checked, jitter: +$('cJ').value, use_delay: $('cuD').checked, delay: +$('cD').value }; try { localStorage.removeItem('hw_hth'); } catch (e) { /* private mode */ } save(cfg); };
+      }
+      if (tab === 'sync') {
+        $('sb').innerHTML = '<div class="card"><div class="hd"><h2>Same settings on every probe</h2><span class="sub">pick the probe that is right, see where the others differ, copy</span></div><div class="bd col gap12" id="syB"><div class="small muted">Reading the probes…</div></div></div>' +
+          '<div class="card"><div class="hd"><h2>Backup</h2><span class="sub">hub settings and every probe\u2019s settings in one file, without passwords and tokens</span></div><div class="bd"><a class="btn btn-s" href="/api/backup">' + I('download') + 'Download backup</a></div></div>';
+        var LBL = { 'ping.interval_ms': 'Ping every (ms)', 'ping.timeout_ms': 'Ping timeout (ms)', 'ping.size': 'Packet size (bytes)', 'alerts.window_s': 'Status window (s)', 'alerts.loss_warn': 'Warning at loss (%)',
+          'alerts.loss_crit': 'Critical at loss (%)', 'alerts.rtt_warn_ms': 'Warning at latency (ms)', 'alerts.rtt_crit_ms': 'Critical at latency (ms)', 'auto_mtr.enabled': 'Automatic MTR on', 'auto_mtr.loss_pct': 'Start at loss (%)',
+          'auto_mtr.window_s': 'Loss measured over (s)', 'auto_mtr.cooldown_min': 'Cooldown (min)', 'auto_mtr.per_location': 'One run per location', 'auto_mtr.max_per_hour': 'At most per hour', 'auto_mtr.mode': 'Mode',
+          'auto_mtr.on_down': 'When a target is down', 'auto_mtr.on_latency': 'On high latency', 'auto_mtr.latency_ms': 'Latency over (ms)', 'auto_mtr.latency_rise_ms': 'Latency rise over (ms)', 'auto_mtr.on_recovery': 'Once more when fixed',
+          'mtr.cycles': 'MTR cycles', 'mtr.interval_s': 'MTR interval (s)', 'mtr.resolve': 'Resolve names', 'mtr.asn': 'Show AS numbers', 'mtr.max_parallel': 'Runs at the same time', 'mtr.public_ip_url': 'Public IP from',
+          'tcp_check.enabled': 'TCP port check', 'tcp_check.port': 'TCP port', 'tcp_check.every_h': 'Check every (h)', 'retention.raw_days': 'Per-second data (days)', 'retention.m1_days': '1-minute data (days)',
+          'retention.m5_days': '5-minute data (days)', 'retention.mtr_days': 'MTR runs (days)', 'retention.mtr_max': 'MTR runs (at most)' };
+        var SEC = [['targets', 'Targets and roles'], ['alerts', 'Ping and status'], ['auto', 'Automatic MTR'], ['schedules', 'Periodic MTR'], ['mtr', 'MTR and TCP'], ['retention', 'Retention']];
+        var tsig = function (t) { return [t.name || '', t.location || '', t.role || '', t.enabled !== false].join('|'); };
+        var show = function (v) { return v === true ? 'on' : v === false ? 'off' : v == null || v === '' ? '–' : String(v); };
+        api('/api/probe-settings').then(function (d) {
+          var ok = d.probes.filter(function (p) { return p.config; });
+          var st = { src: (ok[0] || {}).id, secs: {}, to: {}, all: false };
+          // rows of one part: every setting of its sections; lists (targets, roles, schedules) as one summary row each
+          var rowsOf = function (sec) { var src = (ok.filter(function (p) { return p.id === st.src; })[0] || ok[0]).config, out = [];
+            d.sections[sec].forEach(function (k) { var v = src[k];
+              if (Array.isArray(v) || v == null) out.push({ label: { targets: 'Targets', roles: 'Roles', schedules: 'Schedules' }[k] || k, key: k, list: true });
+              else Object.keys(v).forEach(function (s) { out.push({ label: LBL[k + '.' + s] || k + '.' + s, key: k, sub: s }); }); });
+            return out; };
+          var val = function (cfg, r) { var v = cfg[r.key]; return r.list ? v : v ? v[r.sub] : undefined; };
+          var cellText = function (cfg, r, src) {
+            var v = val(cfg, r);
+            if (!r.list) return show(v);
+            v = v || [];
+            if (r.key === 'targets') { var a = {}, b = {}; (src[r.key] || []).forEach(function (t) { a[t.host] = tsig(t); }); v.forEach(function (t) { b[t.host] = tsig(t); });
+              var add = Object.keys(a).filter(function (h) { return !(h in b); }).length, ext = Object.keys(b).filter(function (h) { return !(h in a); }).length, ch = Object.keys(b).filter(function (h) { return h in a && a[h] !== b[h]; }).length;
+              return v.length + ' targets' + (add || ext || ch ? ' (' + [add ? add + ' missing' : '', ext ? ext + ' extra' : '', ch ? ch + ' different' : ''].filter(Boolean).join(', ') + ')' : ''); }
+            if (r.key === 'roles') return v.map(function (x) { return x.name + (x.enabled === false ? ' (off)' : ''); }).join(', ') || '–';
+            return v.length ? v.map(function (x) { return x.name + ' · ' + x.every_min + ' min · ' + (x.hosts || []).length + ' IPs' + (x.enabled ? '' : ' (off)'); }).join('; ') : 'none'; };
+          var same = function (cfg, r, src) { return JSON.stringify(val(cfg, r)) === JSON.stringify(val(src, r)); };
+          function draw() {
+            var src = (ok.filter(function (p) { return p.id === st.src; })[0] || {}).config;
+            if (!src) { $('syB').innerHTML = '<div class="small muted">No probe answers. ' + d.probes.map(function (p) { return esc(p.name) + ': ' + esc(p.error || ''); }).join(' · ') + '</div>'; return; }
+            var others = ok.filter(function (p) { return p.id !== st.src; });
+            var nd = function (sec, p) { return rowsOf(sec).filter(function (r) { return !same(p.config, r, src); }).length; };
+            var html = '<div class="row gap12"><label class="row gap4 small"><b>Copy from</b><select id="syS">' + ok.map(function (p) { return '<option value="' + esc(p.id) + '"' + (p.id === st.src ? ' selected' : '') + '>' + esc(p.name) + '</option>'; }).join('') + '</select></label>' +
+              '<span class="grow"></span>' + HW.sw('syAll', st.all, 'Show settings that are the same too', '') + '</div>' +
+              (d.probes.length > ok.length ? '<div class="banner warn">' + I('alert') + 'Not answering, left out: ' + esc(d.probes.filter(function (p) { return !p.config; }).map(function (p) { return p.name + ' (' + (p.error || '') + ')'; }).join(', ')) + '</div>' : '') +
+              SEC.map(function (s) { var rows = rowsOf(s[0]), diff = others.reduce(function (a, p) { return a + nd(s[0], p); }, 0);
+                var vis = rows.filter(function (r) { return st.all || others.some(function (p) { return !same(p.config, r, src); }); });
+                return '<div class="sysec"><div class="row"><label class="row gap4"><input type="checkbox" data-sec="' + s[0] + '"' + (st.secs[s[0]] ? ' checked' : '') + '><b>' + s[1] + '</b></label>' +
+                  '<span class="pill ' + (diff ? 'warn' : 'ok') + '">' + (diff ? diff + ' different' : 'the same everywhere') + '</span></div>' +
+                  (vis.length ? '<div class="tw mt8"><table class="table"><thead><tr><th>Setting</th><th>' + esc((ok.filter(function (p) { return p.id === st.src; })[0] || {}).name) + ' <span class="xs muted">source</span></th>' + others.map(function (p) { return '<th>' + esc(p.name) + ' <span class="xs muted">v' + esc(p.version || '?') + '</span></th>'; }).join('') + '</tr></thead><tbody>' +
+                    vis.map(function (r) { return '<tr><td class="small">' + esc(r.label) + '</td><td class="small">' + esc(cellText(src, r, src)) + '</td>' + others.map(function (p) { var eq = same(p.config, r, src);
+                      return '<td class="small' + (eq ? ' muted' : ' sydiff') + '">' + esc(cellText(p.config, r, src)) + '</td>'; }).join('') + '</tr>'; }).join('') + '</tbody></table></div>' : '') + '</div>'; }).join('') +
+              '<div class="row gap12"><b class="small">Copy to</b>' + others.map(function (p) { return '<label class="row gap4 small"><input type="checkbox" data-to="' + esc(p.id) + '"' + (st.to[p.id] !== false ? ' checked' : '') + '>' + esc(p.name) + '</label>'; }).join('') +
+              '<span class="grow"></span><button class="btn-p" id="syGo">' + I('check') + 'Copy</button></div>' +
+              '<div class="xs muted">The site name, password, tokens and access settings stay as they are on each probe. Each probe checks what it gets; one that can\u2019t take it keeps its own settings and says why.</div>';
+            $('syB').innerHTML = html;
+            $('syS').onchange = function () { st.src = this.value; draw(); };
+            $('syAll').onchange = function () { st.all = this.checked; draw(); };
+            [].forEach.call($('syB').querySelectorAll('[data-sec]'), function (c) { c.onchange = function () { st.secs[c.dataset.sec] = c.checked; }; });
+            [].forEach.call($('syB').querySelectorAll('[data-to]'), function (c) { c.onchange = function () { st.to[c.dataset.to] = c.checked; }; });
+            $('syGo').onclick = function () {
+              var secs = SEC.map(function (s) { return s[0]; }).filter(function (s) { return st.secs[s]; }), to = others.filter(function (p) { return st.to[p.id] !== false; });
+              if (!secs.length) return HW.toast('Tick the parts to copy', true);
+              if (!to.length) return HW.toast('Tick at least one probe to copy to', true);
+              var srcName = (ok.filter(function (p) { return p.id === st.src; })[0] || {}).name;
+              HW.modal('Copy settings', '<p>Copy <b>' + secs.map(function (s) { return SEC.filter(function (x) { return x[0] === s; })[0][1]; }).join(', ') + '</b> from <b>' + esc(srcName) + '</b> to <b>' + esc(to.map(function (p) { return p.name; }).join(', ')) + '</b>?</p>' +
+                (secs.indexOf('targets') >= 0 ? '<p class="small warn">Targets: the list on those probes becomes the same as on ' + esc(srcName) + '. Their ping history of removed IPs stays until retention clears it.</p>' : '') +
+                (secs.indexOf('schedules') >= 0 && secs.indexOf('targets') < 0 ? '<p class="small muted">Schedules name IPs; a probe without those IPs refuses them.</p>' : ''),
+                '<button class="btn-g" id="cpX">Cancel</button><button class="btn-p" id="cpO">Copy</button>');
+              $('cpX').onclick = HW.closeModal;
+              $('cpO').onclick = function () { HW.closeModal();
+                api('/api/probe-settings/apply', { method: 'POST', body: { source: st.src, to: to.map(function (p) { return p.id; }), sections: secs } }).then(function (r) {
+                  var bad = r.results.filter(function (x) { return x.error; });
+                  HW.toast(bad.length ? bad.map(function (x) { return x.name + ': ' + x.error; }).join(' · ') : 'Copied to ' + r.results.map(function (x) { return x.name; }).join(', '), !!bad.length);
+                  api('/api/probe-settings').then(function (n) { d = n; ok = d.probes.filter(function (p) { return p.config; }); draw(); });
+                }).catch(function (e) { HW.toast(e.message, true); }); };
+            };
+          }
+          draw();
+        }).catch(function (e) { $('syB').innerHTML = '<div class="small bad">' + esc(e.message) + '</div>'; });
       }
       if (tab === 'security') {
         $('sb').innerHTML = '<div class="card"><div class="hd"><h2>Access</h2></div><div class="bd col gap12">' + HW.sw('sV', cfg.security.view_requires_login, 'Viewing needs a login too', 'Off: anyone on the network can look') +

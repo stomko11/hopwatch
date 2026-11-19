@@ -1,9 +1,11 @@
+import json
 import os
 import sys
 import tempfile
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "app"))
+sys.path.insert(1, os.path.join(os.path.dirname(__file__), "..", "..", "shared"))
 
 import config  # noqa: E402
 import hub     # noqa: E402
@@ -177,3 +179,37 @@ class CrossTest(unittest.TestCase):
         self.runs["a"].append({"id": 2, "host": "h", "trig": "auto", "created": 1100, "status": "done", "mode": "icmp"})
         self.x.tick(now=1120)
         self.assertEqual(sorted(self.posted), [("b", "cross"), ("c", "cross")])
+
+
+class SyncTest(unittest.TestCase):
+    """Copying settings: only the chosen parts, never the security block or the site name."""
+    def test_copy_sections(self):
+        import web
+        cfgs = {"a": {"site_name": "A", "auto_mtr": {"loss_pct": 10}, "targets": [{"host": "h1"}], "security": {"x": 1}},
+                "b": {"site_name": "B", "auto_mtr": {"loss_pct": 20}, "targets": [{"host": "h2"}], "security": {"x": 2}}}
+        put = {}
+
+        def call(p, path, body=None, method=None, timeout=0):
+            if method == "PUT":
+                put[p["id"]] = body
+                return {}
+            return json.loads(json.dumps(cfgs[p["id"]]))
+        ps = [{"id": "a", "name": "A", "enabled": True}, {"id": "b", "name": "B", "enabled": True}]
+        old = (hub.call, hub.each, web.probes)
+        hub.call, hub.each = call, lambda ps_, fn: {p["id"]: fn(p) for p in ps_}
+        web.probes = lambda h, q=None, enabled=True: ps
+
+        class H:
+            app = type("A", (), {"cache": type("C", (), {"d": {}})()})()
+
+            def _body(self):
+                return {"source": "a", "to": ["b"], "sections": ["auto"]}
+        try:
+            r = web.api_probe_settings_apply(H(), {}, None)
+        finally:
+            hub.call, hub.each, web.probes = old
+        self.assertEqual(r["results"][0].get("ok"), True)
+        self.assertEqual(put["b"]["auto_mtr"], {"loss_pct": 10})          # copied
+        self.assertEqual(put["b"]["targets"], [{"host": "h2"}])           # not chosen: kept
+        self.assertEqual(put["b"]["site_name"], "B")
+        self.assertNotIn("security", put["b"])                            # the probe keeps its own

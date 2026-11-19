@@ -10,7 +10,7 @@ import os
 import re
 import threading
 
-VERSION = "0.2.10"
+VERSION = "0.2.11"
 
 DEFAULTS = {
     "site_name": "",

@@ -25,9 +25,7 @@
   function nav() {
     $('nav').innerHTML = NAV.map(function (n) { return '<a href="#/' + n[0] + '" class="' + (S.view === n[0] ? 'on' : '') + '">' + I(n[1]) + '<span class="lbl">' + n[2] + '</span></a>'; }).join('');
     $('loginBtn').innerHTML = admin() ? I('out') + 'Log out' : S.info && !S.info.auth.password_set ? I('lock') + 'Set password' : I('lock') + 'Log in';
-    var th = HW.ls('theme') || 'auto';
-    $('themeBtn').innerHTML = th === 'auto' ? '<span class="xs" style="font-weight:700">A</span>' : I(th === 'light' ? 'sun' : 'moon');
-    $('themeBtn').title = 'Theme: ' + { auto: 'auto (follows the system)', dark: 'dark', light: 'light' }[th] + ' – click to change';
+    if (S.thSeg) S.thSeg.set(HW.ls('theme') || 'auto');
     $('prefsBtn').innerHTML = I('more');
   }
   function loadInfo() {
@@ -67,8 +65,7 @@
     HW.prefs(this, { login: $('loginBtn').innerHTML, onLogin: function () { $('loginBtn').click(); },
       onChange: function () { HW.seg($('tzSeg'), HW.TZ, HW.tz, function (v) { HW.tz = v; HW.ls('tz', v); route(); }); route(); } });
   };
-  $('themeBtn').onclick = function () { var order = ['auto', 'dark', 'light'], cur = HW.ls('theme') || 'auto';
-    var nxt = order[(order.indexOf(cur) + 1) % 3]; HW.theme(nxt); HW.toast('Theme: ' + { auto: 'follows the system', dark: 'dark', light: 'light' }[nxt]); route(); };
+  S.thSeg = HW.themeSeg($('themeSeg'), function () { route(); });
   HW.onTheme = function () { route(); };
   $('loginBtn').onclick = function () {
     if (admin()) api('/api/logout', { method: 'POST' }).then(function () { loadInfo().then(route); });

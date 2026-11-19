@@ -390,6 +390,70 @@ def api_probe_test(h, q, _):
     return {"site": info["site"], "version": info["version"], "targets": len(cfg["targets"])}
 
 
+# -------------------------------------------------------------------- probe settings: compare, copy, back up
+# what can be copied from one probe to the others; the site name and the security block never are
+SECTIONS = {"targets": ["targets", "roles"], "alerts": ["ping", "alerts"], "auto": ["auto_mtr"],
+            "schedules": ["schedules"], "mtr": ["mtr", "tcp_check"], "retention": ["retention"]}
+
+
+def _probe_cfg(p):
+    info = hub.call(p, "/api/info", timeout=8)
+    cfg = hub.call(p, "/api/config", timeout=10)
+    cfg.pop("security", None)
+    return {"version": info.get("version"), "site": info.get("site"), "config": cfg}
+
+
+def api_probe_settings(h, q, _):
+    ps = probes(h)
+    res = hub.each(ps, _probe_cfg)
+    return {"sections": SECTIONS, "probes": [{"id": p["id"], "name": p["name"], **res.get(p["id"], {"error": "no answer"})} for p in ps]}
+
+
+def api_probe_settings_apply(h, q, _):
+    """Copy the chosen sections from one probe to others. Each probe checks the result itself (its
+    own validation), so a probe that would end up with bad settings keeps the ones it has."""
+    b = h._body()
+    secs = [x for x in (b.get("sections") or []) if x in SECTIONS]
+    if not secs:
+        raise ValueError("pick at least one part to copy")
+    ps = {p["id"]: p for p in probes(h)}
+    src = ps.get(b.get("source"))
+    if not src:
+        raise ValueError("pick the probe to copy from")
+    dst = [ps[x] for x in (b.get("to") or []) if x in ps and x != src["id"]]
+    if not dst:
+        raise ValueError("pick at least one probe to copy to")
+    source = hub.call(src, "/api/config", timeout=10)
+    keys = [k for s_ in secs for k in SECTIONS[s_]]
+
+    def put(p):
+        cfg = hub.call(p, "/api/config", timeout=10)
+        cfg.pop("security", None)          # the probe keeps its own password, tokens and access settings
+        for k in keys:
+            if k in source:
+                cfg[k] = json.loads(json.dumps(source[k]))
+        hub.call(p, "/api/config", cfg, method="PUT", timeout=20)
+        return {"ok": True}
+    res = hub.each(dst, put)
+    h.app.cache.d.clear()
+    log.info("probe settings %s copied from %s to %s", ",".join(secs), src["name"], ",".join(p["name"] for p in dst))
+    return {"results": [{"id": p["id"], "name": p["name"], **res.get(p["id"], {"error": "no answer"})} for p in dst]}
+
+
+def api_backup(h, q, _):
+    """One JSON file: the hub settings and every probe's settings, without passwords and tokens."""
+    c = h.app.cfg.get()
+    c.pop("security", None)
+    for p in c["probes"]:
+        p.pop("token", None)
+    ps = probes(h)
+    res = hub.each(ps, _probe_cfg)
+    out = {"product": "Hopwatch backup", "version": VERSION, "created": iso(time.time()), "hub": c,
+           "probes": [{"name": p["name"], "url": p["url"], **res.get(p["id"], {"error": "no answer"})} for p in ps]}
+    h._send(200, json.dumps(out, indent=1).encode(), "application/json",
+            {"Content-Disposition": f'attachment; filename="hopwatch-backup-{time.strftime("%Y%m%d-%H%M", time.gmtime())}Z.json"'})
+
+
 def api_cross(h, q, _):
     """What cross-site MTR did lately (newest first)."""
     return {"log": list(h.app.cross.log), "config": h.app.cfg.get()["cross"]}
@@ -410,6 +474,9 @@ ROUTES = {
     ("PUT", "/api/config"): (api_config_put, "admin"),
     ("POST", "/api/probes/test"): (api_probe_test, "admin"),
     ("GET", "/api/cross"): (api_cross, "view"),
+    ("GET", "/api/probe-settings"): (api_probe_settings, "admin"),
+    ("POST", "/api/probe-settings/apply"): (api_probe_settings_apply, "admin"),
+    ("GET", "/api/backup"): (api_backup, "admin"),
 }
 ROUTES.update(httpbase.COMMON_ROUTES)
 Handler.routes = ROUTES

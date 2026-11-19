@@ -258,3 +258,7 @@ details.help>summary::-webkit-details-marker{display:none} details.help>div{padd
 .pkr{justify-content:flex-start;text-align:left;width:100%;gap:8px;min-width:0}
 
 .tsearch{width:280px;max-width:100%} .table tr.fr th{padding:4px 6px} .table tr.fr input{width:100%;min-width:70px;height:28px;font-size:12px;padding:3px 7px} .table tr.fr input.on{border-color:var(--accent)}
+
+.seg.seg-i button{padding:0 7px;display:inline-flex;align-items:center;justify-content:center} .seg.seg-i svg{width:15px;height:15px}
+.sysec{padding:10px 0;border-top:1px solid var(--border)} .sysec:first-of-type{border-top:0} td.sydiff{color:var(--warn);font-weight:600}
+.side .seg button{padding:0 8px} .side .seg.seg-i button{padding:0 6px} .side .row.wrapn{gap:6px}

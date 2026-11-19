@@ -25,6 +25,7 @@
     down: '<path d="m6 9 6 6 6-6"/>',
     sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
     moon: '<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>',
+    monitor: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>',
     clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
     plus: '<path d="M12 5v14M5 12h14"/>',
     trash: '<path d="M3 6h18M8 6V4h8v2m-9 0 1 14h8l1-14"/>',
@@ -58,6 +59,13 @@
   HW.tz = HW.ls('tz') || 'utc';
   HW.TZ = [['utc', 'UTC'], ['local', 'Local']];
   HW.THEMES = [['auto', 'Auto'], ['dark', 'Dark'], ['light', 'Light']];
+  /* theme as icons, in the same segmented style as UTC / Local: light, dark, follow the system */
+  HW.themeSeg = function (el, onChange) {
+    var it = [['light', HW.icon('sun'), 'Light', 1], ['dark', HW.icon('moon'), 'Dark', 1], ['auto', HW.icon('monitor'), 'Follow the system', 1]];
+    var s = HW.seg(el, it, HW.ls('theme') || 'auto', function (v) { HW.theme(v); if (onChange) onChange(v); });
+    el.classList.add('seg-i');
+    return s;
+  };
   function P2(n) { return (n < 10 ? '0' : '') + n; }
   HW.parts = function (ms) { var d = new Date(ms), u = HW.tz === 'utc';
     return { Y: u ? d.getUTCFullYear() : d.getFullYear(), M: (u ? d.getUTCMonth() : d.getMonth()) + 1, D: u ? d.getUTCDate() : d.getDate(),
@@ -147,7 +155,7 @@
     var out = function (e) { if (!d.contains(e.target) && !anchor.contains(e.target)) close(); };
     setTimeout(function () { document.addEventListener('mousedown', out, true); });
     HW.seg(d.querySelector('[data-s=tz]'), HW.TZ, HW.tz, function (v) { HW.tz = v; HW.ls('tz', v); if (o.onChange) o.onChange(); });
-    HW.seg(d.querySelector('[data-s=th]'), HW.THEMES, HW.ls('theme') || 'auto', function (v) { HW.theme(v); if (o.onChange) o.onChange(); });
+    HW.themeSeg(d.querySelector('[data-s=th]'), function () { if (o.onChange) o.onChange(); });
     var l = d.querySelector('[data-l]'); if (l) l.onclick = function () { close(); o.onLogin(); };
     pops.push({ close: close });
   };
@@ -155,7 +163,7 @@
   /* ------------------------------------------------------------ segmented control + switch */
   HW.seg = function (el, items, value, onChange) {
     el.className = 'seg';
-    el.innerHTML = items.map(function (it) { return '<button type="button" data-v="' + esc(it[0]) + '"' + (String(it[0]) === String(value) ? ' class="on"' : '') + (it[2] ? ' title="' + esc(it[2]) + '"' : '') + '>' + esc(it[1]) + '</button>'; }).join('');
+    el.innerHTML = items.map(function (it) { return '<button type="button" data-v="' + esc(it[0]) + '"' + (String(it[0]) === String(value) ? ' class="on"' : '') + (it[2] ? ' title="' + esc(it[2]) + '" aria-label="' + esc(it[2]) + '"' : '') + '>' + (it[3] ? it[1] : esc(it[1])) + '</button>'; }).join('');
     el.onclick = function (e) { var b = e.target.closest('button'); if (!b) return;
       [].forEach.call(el.children, function (x) { x.className = x === b ? 'on' : ''; }); onChange(b.dataset.v); };
     return { set: function (v) { [].forEach.call(el.children, function (x) { x.className = x.dataset.v === String(v) ? 'on' : ''; }); } };
