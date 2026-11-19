@@ -447,10 +447,12 @@
      first one (its own automatic runs and the cross-site runs they caused); a lasting problem
      gives one occasion per 10 minutes, not one endless one */
   var OCC_WIN = 600;
-  function occasions(runs) {
+  /* host -> its group now ("CPS · FX"); runs keep the label they had when they ran, which may be older */
+  function groupMap(l) { var m = {}; ((l && l.probes) || []).forEach(function (p) { (p.targets || []).forEach(function (t) { if (!m[t.host]) m[t.host] = t.group || t.location; }); }); return m; }
+  function occasions(runs, gm) {
     var by = {}, out = [];
     runs.slice().sort(function (a, b) { return (a.started || a.created) - (b.started || b.created); }).forEach(function (r) {
-      var t = r.started || r.created, k = r.location || r.host, o = by[k];
+      var t = r.started || r.created, k = (gm && gm[r.host]) || r.location || r.host, o = by[k];
       if (!o || t - o.t0 > OCC_WIN) { o = by[k] = { location: k, t0: t, t1: t, runs: [] }; out.push(o); }
       o.t1 = Math.max(o.t1, (r.finished || t)); o.runs.push(r);
     });
@@ -469,7 +471,7 @@
     head(loc + ' · MTR from every site', HW.fdt(t0, 1) + ' – ' + HW.fdt(t1, 1), '<a class="btn-s btn-g" href="#/mtr?view=occ&loc=' + encodeURIComponent(loc) + '">' + I('route') + 'All occasions</a>');
     $('main').innerHTML = '<div class="card"><div class="empty">Loading…</div></div>';
     Promise.all([live(), api('/api/mtr?limit=2000&from=' + Math.floor(t0) + '&to=' + Math.ceil(t1))]).then(function (x) {
-      var l = x[0], runs = x[1].runs.filter(function (r) { return (r.location || r.host) === loc; });
+      var l = x[0], gm = groupMap(l), runs = x[1].runs.filter(function (r) { return (gm[r.host] || r.location || r.host) === loc; });
       var sites = l.probes.map(function (p) { return p.name; }), hosts = {}; runs.forEach(function (r) { hosts[r.host] = 1; });
       // rows = moments: a site's own run with the cross-site runs it caused (they name it: "its run #N"),
       // other runs of the same target and kind within 2 minutes of each other; ICMP and TCP apart
@@ -511,7 +513,15 @@
       $('main').innerHTML = '<div class="card"><div class="bd row gap12"><span id="rR"></span><span id="rV"></span></div></div>' +
         '<div class="card"><div class="hd"><h2 id="rN">Runs</h2><span class="sub" id="rB"></span></div><div class="bd"><div id="rL"></div><div id="rO"></div></div></div>';
       HW.seg($('rV'), [['runs', 'Runs'], ['occ', 'Occasions']], f.view, function (v) { f.view = v; HW.ls('hmtr', f); last && show(last); });
-      var last = null, otbl = null;
+      var last = null, otbl = null, gm = {};
+      // why a location picked on the Overview has no runs, and a way to get some
+      var occLocs = function () { return ($('rO')._tf.location || {}).in || []; };
+      var occWhy = function () { var lf = occLocs();
+        return lf.length ? '<div class="col gap12" style="align-items:center"><div>No MTR runs for <b>' + esc(lf.join(', ')) + '</b> in this window.</div>' +
+          '<div class="small muted" style="max-width:560px">The Overview marks a location from the hub\u2019s correlation limit (Settings → Correlation, e.g. 1% loss). A probe starts an automatic MTR only at its own limit (probe Settings → Automatic MTR, by default 20% loss over 60 s), so small losses show up there without a trace.</div>' +
+          '<button class="btn-s btn-p" data-occnow>' + I('play') + 'MTR from all sites now</button></div>' : 'Nothing matches the search or the filters.'; };
+      $('rO').addEventListener('click', function (e) { if (e.target.closest('[data-occnow]')) { var lf = occLocs(); mtrDialog(Object.keys(gm).filter(function (h) { return lf.indexOf(gm[h]) >= 0; })); } });
+      live().then(function (l) { gm = groupMap(l); if (last) show(last); }).catch(function () { /* labels from the runs */ });
       $('rO')._tf = {};
       if (qs('loc')) { $('rO')._tf.location = { in: [qs('loc')] }; }
       var rp = HW.rangePicker($('rR'), [[86400, '24h'], [604800, '7d'], [2592000, '30d']], qs('from') ? { from: +qs('from'), to: +qs('to') } : { range: f.range }, function (w) { if (w.range) f.range = w.range; HW.ls('hmtr', f); load(); });
@@ -527,7 +537,7 @@
       function show(r) {
           $('rL').style.display = f.view === 'runs' ? '' : 'none'; $('rO').style.display = f.view === 'occ' ? '' : 'none';
           if (f.view === 'occ') {
-            var oc = occasions(r.runs);
+            var oc = occasions(r.runs, gm);
             $('rN').textContent = oc.length + ' occasions · ' + r.runs.length + ' runs';
             var oc_cols = [
               { key: 't0', label: 'Started', type: 'time', nowrap: true, text: function (o) { return HW.fdt(o.t0); }, sort: function (o) { return o.t0; } },
@@ -538,7 +548,7 @@
               { key: 'trigs', label: 'Triggers', text: function (o) { return Object.keys(o.trigs).map(function (k) { return k + ' ×' + o.trigs[k]; }).join(', '); } },
               { key: 'dur', label: 'Lasted', type: 'num', align: 'r', val: function (o) { return Math.round((o.t1 - o.t0) / 60); }, text: function (o) { return HW.fdur(o.t1 - o.t0); } },
               { key: 'worst', label: 'Worst loss', type: 'num', minw: 140, val: function (o) { return o.worst; }, text: function (o) { return o.worst == null ? '' : o.worst + '%'; }, sort: function (o) { return o.worst == null ? -1 : o.worst; }, html: function (o) { return lossCell(o.worst); } }];
-            if (otbl) otbl.render(oc); else otbl = HW.table($('rO'), { id: 'hub-mtr-occ', rows: oc, columns: oc_cols, filterRow: true, empty: 'No runs in this window.',
+            if (otbl) otbl.render(oc); else otbl = HW.table($('rO'), { id: 'hub-mtr-occ', rows: oc, columns: oc_cols, filterRow: true, empty: 'No runs in this window.', emptyFiltered: occWhy,
               onRow: function (o) { location.hash = occLink(o); } });
             return;
           }

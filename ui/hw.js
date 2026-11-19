@@ -648,7 +648,8 @@
       var ph = function () { return 'contains…'; }, tip = '';
       var filt = el._showF && !FR ? '<div class="form" style="margin-bottom:8px">' + V.map(function (c) { return '<div class="field"><label>' + esc(c.label) + '</label><input data-f="' + c.key + '" value="' + esc(el._tf[c.key] || '') + '" placeholder="' + esc(ph(c)) + '"' + tip + '></div>'; }).join('') + '</div>' : '';
       var body;
-      if (!L.length && !(FR && o.rows.length && !narrow)) body = '<div class="empty">' + (o.rows.length ? 'Nothing matches the search or the filters.' : (o.empty || 'Nothing here.')) + '</div>';
+      var nothing = o.emptyFiltered ? o.emptyFiltered() : 'Nothing matches the search or the filters.';
+      if (!L.length && !(FR && o.rows.length && !narrow && !o.emptyFiltered)) body = '<div class="empty">' + (o.rows.length || (o.emptyFiltered && Object.keys(el._tf).length) ? nothing : (o.empty || 'Nothing here.')) + '</div>';
       else if (narrow) body = '<div class="tcards">' + L.map(function (r, i) {
         return '<div class="tcard' + (o.onRow || kidsOf(r) ? ' click' : '') + (T && T.parent(r) ? ' sub' : '') + (sel && sel[o.rowKey(r)] ? ' sel' : '') + '" data-i="' + i + '">' + (T && kidsOf(r) ? '<div class="xs muted">' + caret(r, 0) + kidsOf(r) + ' groups – tap to ' + (el._open[T.key(r)] ? 'close' : 'open') + '</div>' : '') + (sel ? '<input type="checkbox" data-s="' + esc(o.rowKey(r)) + '"' + (sel[o.rowKey(r)] ? ' checked' : '') + '>' : '') +
           '<dl>' + V.map(function (c) { return '<dt>' + esc(c.label) + '</dt><dd>' + (c.html ? c.html(r) : esc(txt(c, r))) + '</dd>'; }).join('') + '</dl></div>'; }).join('') + '</div>';
